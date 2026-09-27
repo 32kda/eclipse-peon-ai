@@ -1,55 +1,41 @@
-# Session-Stand — 2026-09-24 (Zyklus komplett: R-DL/R-ET/R-OD-5/R-TC/R3 ✅ auf `fix/nextids-bug-report`)
+# Session-Stand — 2026-09-27 (R-CC-15 Nested-Usage-Leak; Smoke-Test Compact-Hint)
 
-## Wo wir stehen
+> Achtung: docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts
+> im Chat, Jon schreibt. (Da Mek hatte 2026-09-27 memory.md überschrieben — nicht wiederholen.)
 
-**Branch `fix/nextids-bug-report`** (von main `4a6abdd`), gepusht (HEAD `e3ff278` + Docs-Aufräum-Commits),
-nicht gemerged — Merge = Pauls Entscheidung. Docs aufgeräumt 2026-09-24: open-points.md von 539
-Zeilen stranguriert (🔒-Blöcke → resolved-points.md konsolidiert, Bug-Fix-Backlog priorisiert an
-den Anfang), memory.md kompakt.
+## Branch
+- **`story/compact-input-budget`** — Paul: **kein Merge**, weiter arbeiten. Branch ahead 3:
+  `aaea9e5` (TODO-REMOVE-Diagnostik), `0b38d17`, `8cfa46a` (docs). Merge → main = Paul.
 
-- **✅ R-OD-5** (eclipseBuildProject Cap 100 + Disclosure): `5d74aab`, Da-Dok ACCEPTED, Surefire 953.
-- **✅ R-TC-6/7/8/9** (Shell-Approval: Autonom = Jon/Plan, Call-Zeit-Evaluation, `true` ignoriert,
-  eigene Klasse `ShellApprovalService`): `6a72e92`+`43fe725`, Surefire 959, PDE 285. ADR-0026 gegen
-  IST korrigiert (Phantom `QuestionOrchestrator`).
-- **✅ R3** (Shell workingDirectory-Default = Projekt-Disk-Pfad, `cwd=`-Disclosure): `c06efcb`,
-  Da-Dok ACCEPTED, Surefire 964, PDE 288. Smoke ✅ Paul (Pkt 1+2; „kein Projekt" nur noch Safety-Net,
-  automatisiert gedeckt).
+## Smoke-Test Compact-Hint (2026-09-27, alle 4 grün, Paul-Order)
+- Mek/Thinka/Dok: Compact-Tool vorhanden, Hint → sofort kompaktiert, Codes überlebt.
+- **Da Sniffa** (kein Compact-Tool): echter `CONTEXT LIMIT WARNING` (19150/20000) während der
+  Lektüre, kompaktierte selbst, antwortete korrekt mit Code SUCH-1106.
+- **Befund → R-CC-15 🚧** (docs/compact.md): nach `Da Sniffa done` PO-Hint
+  `memory=31002(estimate=false) model=31002 estimate=1902` — Sub-Agent-Usage sprang ins
+  Parent-Memory. Da Dok verifiziert code-seitig, Da Mek baut roten Test (Estimates im Test).
+- Smoke-Befunde 2026-09-26: Compact lief sauber (Skip = LLM-Doppel-Aufruf, Guard size<3 by design);
+  memory==model → kein Wildwuchs; Fixed-Overhead ≈ 7,3k → 10k-Limit praktisch sinnlos (30–40k testen).
 
-## Nächste Schritte
+## In Arbeit
+1. **R-CC-15 ✅** (`4cb2783` + **Paul-Hotfix**: `agent == null || !hasCompactTool` → Fallback-Hint,
+   ToolService:216 — „Compact geht nur mit Agent"). Surefire 1026/0/0/0; lint 0. Paul smoke-testet.
+2. **Neue Befunde (Jon):** ~~Bug A~~ **gelöst** (Paul-Guard + Mek-Inversions-Fix `8fb7baf`,
+   resolved-points) · **Bug B ⏳** CompactSessionTool kompaktiert agent.getMemory() statt
+   req.getMemory() (latent, echten Suchagenten) · **Kleinigkeit** compactSession trotz agent==null
+   exponiert · StreamingBridge-Race (ADR-0058-Nebenbefund).
+   **Aufräum-Inkrement `8fb7baf`:** Test-Dedup 1026→1022 (Doppeltester gestrichen, Begründungen im
+   Commit), Spam-Guard-Test, Surefire 1022/0/0/0, Lint 0. TODO-REMOVE-Logs bleiben drin (nimmt Paul).
+3. **R-CC-16 ❌** — Da Scribe schreibt Compressor-LLM-Context-Größe (ohne Static) ins onTool,
+   Estimate daneben — wartet auf Umsetzung.
+4. **❓ Header 0k estimate (Jon)** — IST: Roster-Refresh nur event-getrieben (onTokenUsage);
+   SOLL-Frage an Paul: Estimate-Pfad in den Refresh — open-points.md.
+5. **TODO-REMOVE-Diagnostik** (`aaea9e5`) — nach Pauls Re-Smoke entfernen (grep `TODO-REMOVE`).
 
-1. **Thema jetzt: Compact + State** (Paul) — R-CC-7 (Compact-Fehler ans LLM + Retry-1×-20s
-   transient-only) + Header-State-Leak (onProblem re-rendert Header) + ApiRetry-Fehlerklassen-
-   Tabelle. Evidenz zentral: docs/header-state-leak.md. → Plan mit Da Thinka, dann Build.
-2. R-TC-Smoke (5 Punkte, tool-confirmation.md) — offen bei Paul.
-3. Tool-Polish I1–I4 (`debugJava*`-Rename + R-JD-13 + QueuedAt-Regel 9 + Homepage) — unverändert.
-4. Compact-Lock-Smoke 3+4; Debugger-Re-Run; Compressor-Empty-Root-Cause (Error-Log +
-   Compact-Model-Config) — Paul.
-
-### Zyklus-Historie (kompakt, Details in den Feature-Docs)
-
-- **✅ R-DL-23/24/25** (nextIds, Pauls Bug-Report): Bindestrich-Präfixe, Rohvorkommen zählen
-  (flach `OP-79`→`OP-80`), skipped-Docs namentlich. Commits `889b315`/`d477820`/`887d301`/
-  `7933301`/`2235dba` (C1 Mutation-Pin). Befund 1 = Anwenderfehler (R-DL-18 deckt ab).
-- **✅ R-ET Rename** `eclipseRunTests`→`eclipseRunJavaTests` (Java-only-Guard): Code `909ce05`,
-  Docs `0188fd3`+`52ce47f`. Pauls Fragen beantwortet (Dauer via CallStats im Result, nicht
-  onTool; Warnings → R-OD-5).
-
-## Smoke-Liste (manuell) — Compact-Lock CT-3…6: 1+2 ✅ Paul
-
-3. Compact fehlschlagen → Queue trotzdem Follow-up.
-4. Slave-Compact → nur Slave 🟢, Da Boss aus (Blatt-Regel), kein Follow-up am Boss.
-
-## Geparkt
-
-`ShellTool.confirmationProvider` volatile (1-Wort-Fix bei Berührung) · Issue #142-ADR ·
-DL-Sweep der 45 Alt-UNBELEGT · UC-DL-60/61 (R-DL-18 gebaut aber ❌ — Flip-Verdacht beim nächsten
-DL-Kontakt prüfen) · Anthropic cache_read-Undercount. Übriges: docs/open-points.md.
-
-## Lektionen (Zyklus)
-
-1. **Bug-Report gegen Code prüfen, bevor Fix-Pläne entstehen:** Da Doks CONCERNS-C1 (ungepinnter
-   Tie-Break `>=`) war exakt die Stelle, die Befund-3 rückholbar gemacht hätte — Mutations-Nachweis
-   rot gemessen statt argumentiert, 5 Minuten Aufwand.
-2. **Opt-in-Blindstelle bei Vergabe-Tools:** `nextIds` las nur Definitionen aus Opt-in-Docs —
-   „free" war eine Lüge über Nicht-Lesbares. Regel-Prinzip: ein Eindeutigkeits-Tool darf im Zweifel
-   nicht raten (R-DL-24 schreibt das jetzt fest).
+## Offen (Paul)
+1. **❓ Fixture-Drift**: pom.xml/Dockerfile im test_project zulässig oder aufräumen + README-Zeile —
+   open-points.md (Da-Mek-Empfehlung: behalten + Doc anpassen).
+2. **⏳ Option A** — Standalone-Peon-Review behält memory*/askUser.
+3. **⏳ Doc-Split CIB** — compact-input-budget.md ausgegliedert statt Umnummerierung.
+4. **⏳ Docs-SOLL-Hygiene-Sweep** — Scope bestätigen.
+5. **Merge → main** — zurückgestellt. 6. **R-CC-7** 🚧 Retry/Fehlerklassen-Backlog.

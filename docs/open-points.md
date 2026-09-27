@@ -3,26 +3,66 @@
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
 Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.md).
 
+## ❓ test_project-Fixture: „minimal" SOLL vs. IST-Inhalt (2026-09-27, searchAgent-Freshness-Check)
+
+`docs/test-setup.md:20-21` sagt SOLL = minimal (`.project`, `.classpath`, `src/`); liegt im
+Fixture inzwischen: `pom.xml`, `Dockerfile`, `copyDirSrc/`, `data/`, `docs/`, `sub/`, `tmp/`,
+`bin/`, `target/`, `peon-plan/`, `.agents/`. Teils legitimer Test-Output (Tests schreiben ins
+Fixture, `test-setup.md:29-30`), aber `pom.xml`/`Dockerfile` sind kein Test-Output — Herkunft
+unklar. README L3 „nicht als echtes Projekt benutzen" ist irreführend (das Fixture ist *bewusst*
+echtes JDT-Projekt, `.project`-Nature ist der Punkt). Fragen an Paul: (a) `pom.xml`/`Dockerfile`
+behalten (dann Doc-SOLL anpassen) oder aufräumen? (b) README-Zeile ergänzen: Zweck + Property
+`peon.test.project` überschreibt den Pfad (`test-setup.md:52-53`)?
+
+## ⏳ Standalone-Peon-Review behält memory*/askUser (2026-09-25, Jon-Entscheid aus dem Build)
+
+Da-Dok-Stop-And-Ask: der Standalone-Peon-Review sieht WorkspaceMemoryTool (+ askUser im UI) —
+die RAM-Sklaven-Stripping-Regel (noPrivilegedTools) greift nur für Sklaven. UC-TF-2
+([agent-tool-filter.md](agent-tool-filter.md)) entsprechend auf den RAM-Sklaven verengt: Standalone
+= wie alle Standalone-Agenten (Peon-Plan/-Dev, Custom), kein neuer Mechanismus. **Rückversicherung
+Paul steht aus** — falls er Standalone-Review auch gestrippt haben will: eigener Mechanismus,
+dann neue Story.
+
+## ⏳ slf4j-simple.jar wird noch mitgebündelt (Paul-Notiz, 2026-09-25)
+
+Verifiziert: `lib/slf4j-simple.jar` liegt weiter im Bundle (`MANIFEST.MF:96` Bundle-ClassPath,
+`build.properties:65`, Plugin-`pom.xml:23-27` Dependency `${slf4j-simple.version} 2.0.19`) — trotz
+eigenem `EclipseSlf4jProvider` (via `META-INF/services/org.slf4j.spi.SLF4JServiceProvider`,
+`Bundle-ClassPath: .` zuerst → unser Provider gewinnt den ServiceLoader-Scan). Vermutlich Rest aus
+dem Zeit vor dem Eclipse-Provider. Bei nächster Berührung: Jar + Dependency raus, Build + Plugin-Lauf
+testen (Test-Scope im core nutzt ohnehin logback statt slf4j-simple).
+
 ## Bug-Fix-Zyklus-Backlog (2026-09-24, priorisiert)
 
-1. **R-CC-7 — Compact-Fehler sichtbar + begrenzter Retry** ([compact-context-counter.md](compact-context-counter.md)):
+1. **R-CC-7 — Compact-Fehler sichtbar + begrenzter Retry** ([compact.md](compact.md)):
    Fehler ans LLM („compact failed" + Ursache) + onProblem; Retry 1× nach 20s nur transient,
    deterministische Fehler sofort ehrlich. Zusammen mit der ApiRetry-non-retryable-Klassifikation
    (eine Fehlerklassen-Tabelle, zwei Verbraucher). Evidenz: header-state-leak.md Fall 1+2.
 2. **Header-State-Leak** ([header-state-leak.md](header-state-leak.md)): onProblem rendert den
    Header-State neu (🟢/Zähler/Working-Hint hängen nach Fehlerpfaden); IST-Messung vor der
    SOLL-Härtung offen (letzter gültiger Wert vs. aktiv falsch gesetzt).
-3. **ApiRetry** (❓ unten, Evidence-Sammlung): non-retryable-Klassifikation + Mindest-Retry bei
-   Connect-Level-Failures (Paul-Idee 2026-09-20) — in die gleiche Fehlerklassen-Tabelle.
+3. **ApiRetry** (❓ eigener Abschnitt unten, Evidence 5×): non-retryable-Klassifikation +
+   Mindest-Retry bei Connect-Level-Failures — in die gleiche Fehlerklassen-Tabelle.
 4. ⏳ `ShellTool.confirmationProvider` non-volatile — pre-existing, harmlos, 1-Wort-Fix bei
    nächster Berührung (Da-Dok-Hinweis R-TC-Review).
+
+## ❓ Context-Pollution-Quellen (2026-09-24, Evidenz aus dem Compact-Thema)
+
+337461 Provider-Tokens vs. 114512 Compact-Schätzung — Pollution-Kandidaten im Jon/Agent-Mode
+(IST-Analyse Da Mek): (a) `eclipseReadFile`/`diskReadFile` ohne Cap (`FileLines` 0/0 = ganze
+Datei), (b) `docs/index.md` + `docs/memory.md` + AGENTS.md **pro Turn** in Jons System-Context
+(`AgentContextComponent.java:130-140`) — index.md wächst ungebremst, (c) Workspace-Memory-Snapshot
+ohne Cap. Frage an Paul: Caps an der Quelle (Read-Größenlimit, Kontext-Items begrenzen) oder
+bewusst so lassen, weil der Compact-Input jetzt budgetiert ([compact.md](compact.md))? Verwandt:
+Workspace-Memory-Vollkopien (unten).
+
 
 ## ❓ Workspace-Memory-Snapshot: Vollkopie je `memoryAdd` (2026-09-23)
 
 Snapshot-Key ist der entries-Hash (ADR-0032) — jede Mutation erzeugt eine frische Vollkopie
 aller Einträge, bis zum Compact. By design, aber die Kosten skalieren schlecht. Frage an Paul:
 eigener Design-Punkt? (inkrementeller Snapshot / Dedup je Eintrag / Compact-frequenter).
-Verwandt: [compact-context-counter.md](compact-context-counter.md) „Offen".
+Verwandt: [compact.md](compact.md) „Offen".
 
 ## ❓ Tool-Time-Disclosure Restkandidaten (2026-09-22, Option B — Paul-Scope)
 
@@ -35,22 +75,6 @@ bleibt ohne Zeitinfo (stateless, Rauschen).
 „Besser als 🟢, aber grün ist auch vollkommen okay" — bewusst nicht gebaut. Umsetzung: zweiter
 Anzeige-Zustand `compacting` + 🟡-Präfix in `AiAgentStatusWidget.text()`. Wiederaufnahme = Mini-Increment.
 Kontext: [compact-lock.md](compact-lock.md).
-
-## 🚧 „!-Messages" — sofortiger History-Insert auch im ToolLoop (2026-09-22, Paul)
-
-Regel 8 in [queued-user-messages.md](queued-user-messages.md); Insert-Punkt/Race offen. Eigene Story.
-
-## ❓ Tool-Evolution PO-Run CR-Verdicts (2026-09-19)
-
-Alle CR-Items entschieden — Verdicts + Begründungen: [resolved-points.md](resolved-points.md)
-(„Tool-Evolution-Run"). Offen bleiben nur die dort gelisteten ❌-Stories (project-problems,
-debugger, web-tools — teils inzwischen ✅) und die geparkten Docs (terminal-session, tool-confirmation).
-
-## ❓ `applyEdit` Not-Found dumpet das gesamte File (2026-09-19 — bewusst so, Lösung offen)
-
-**Paul: bewusst so** — der Dump spart den Read-Roundtrip im Fehlerfall. Offen: Roundtrip vs.
-Context-Bombe bei großen Dateien; gute Lösung (Kontext-Fenster um die ähnlichste Fundstelle)
-existiert nicht. Bleibt stehen, kein Bau.
 
 ## ❓ ApiRetry: Cancellation-/Retry-Klassifikation (Priorität hoch, Evidence 4×)
 
@@ -74,12 +98,6 @@ Befund-Klassen (derselbe Shape: Call bricht statt sichtbarem Retry):
 
 `StreamingBridge.onError` versteckt die Statuszeile → 10s…5min Funkstille (User liest „hängt").
 SOLL-Idee: „retrying in Xs" im Backoff-Fenster. Mini-Story, verwandt mit header-state-leak.
-
-## ❓ Shell-Tool für Plan-/Review-Agent — Whitelist-Capability? (2026-09-10/13)
-
-Use-Case belegt (Da Dok konnte im Release-Scan Commits nicht isolieren — kein Git). Optionen:
-volles ShellTool / reduziert / Whitelist pro Agent (analog Write-Validator). Offen: Scope, Default-Set,
-Read-only-Filter. Verwandt: ADR-0015, ADR-0022.
 
 ## ⏳ Jackson 2 → 3: beobachten (2026-09-10, User)
 
@@ -112,8 +130,7 @@ Bug-Hunt #1 (Replace-All + Count), muss mitfixt werden. Line-Ending-Normalisieru
 
 ## ❓ Deferred Smoke-Test-Kosmetik (User: „Kosmetik ist mir erstmal egal")
 
-Statuszeilen-Striche, Scrollverhalten Advanced Config. Dropdown-Umbau descoped (Klassen gelöscht
-`a1d8d35`), Wiederaufnahme = eigene Story.
+Statuszeilen-Striche, Scrollverhalten Advanced Config.
 
 ## ⏳ Docs-SOLL-Hygiene-Sweep (2026-09-12)
 
@@ -126,11 +143,17 @@ Dedup kann Einzel-Nachricht als Teiltext unterschlagen (Compact ist lossy — ak
 nach Persist-IOException läuft die Session RAM-only weiter (präexistierendes Muster). Keine
 Blocker; Revisit nur bei Beschwerden/Datenverlust-Meldungen.
 
-## Compact Input Budget ([compact-input-budget.md](compact-input-budget.md))
+## Compact ([compact.md](compact.md))
 
 - ❓ Context-Noise zuerst raus (User-Idee, 2026-09-13): Context-Item-Messages vor dem Kürzen
-  nehmen — zusammen mit der Light-Version ausarbeiten („#2 und #5 gehören zusammen").
-- 🔒 R1–R5 SOLL festgelegt, Story ❌ specified. Reihenfolge: erst Compact-Slot-Bug, dann Budget-Light + Noise.
+  nehmen — „Light-Version" des Input-Budgets; die Input-Budget-Story (2026-09-24) deckt das
+  Staging ab, Noise-Entfernung bleibt eigener Punkt.
+- ⏳ **Input-Budget-Doc ausgegliedert** (2026-09-26, Jon): die sechs Lint-Befunde im Compact-Doc
+  (6× `PRAEFIX_FREMD` für die Input-Budget-Regeln; die 6× `DOPPELT_DEFINIERT` waren durch das
+  Löschen von compact-context-counter.md schon weg) mit einem **Doc-Split** gelöst statt
+  Umnummerierung — [compact-input-budget.md](compact-input-budget.md) (Präfix `CIB`), IDs und
+  ~35 Code-Kommentar-Referenzen unangetastet, `compact.md` bleibt Einstieg (Präfix `CC`).
+  Rückversicherung Paul: Split okay, oder doch Umnummerierung unter `CC`?
 
 ## Neu (2026-09-14, story/po-compact-2026-09-13)
 
@@ -151,6 +174,51 @@ nicht. Widerspruch = Verhalten zurückändern, Tests (UC-SEL-4) anpassen.
 
 „class folder 'resources/' not associated to any output library entry" bei grüner Kompilation.
 Pre-existing (Da Mek 2026-09-21 verifiziert). Separater Mini-Fix-Kandidat.
+
+## ⏳ CompactSessionTool kompaktiert agent.getMemory(), der Loop fährt req.getMemory() (Bug B, latent, 2026-09-27)
+
+`CompactSessionTool.java:23-29` → `agent.compact(monitor)` (= `agent.getMemory()`), der Loop läuft
+auf `req.getMemory()` (ToolService:200). Für Haupt-Agenten zufällig dasselbe Objekt
+(`AbstractAgent.doCall` setzt `.memory(agent.memory)` — Konvention, keine Gewähr). Sobald ein
+echter SearchAgent (agent != null + compactSession) mit auseinanderfallenden Objekten existiert:
+Compact leert das **falsche** Memory → Summary landet unerreichbar, R-CC-4-Guard blockiert neue
+Hints → Agent stuck. Optionen: (1) Tool kompaktiert `req.getMemory()` (berührt Compact-Ownership,
+compact-architektur.md), oder (2) fail-fast im Loop (`agent != null && req.getMemory() !=
+agent.getMemory()` → ehrlicher Fehler). Eigene kleine Story mit Doc-Anpassung, Revisit spätestens
+beim echten Suchagenten.
+
+## ⏳ compactSession trotz agent == null exponiert (Kleinigkeit, 2026-09-27)
+
+Bei agent == null bleibt `compactSession` im Tool-Set sichtbar (Hint sagt „cannot be compacted",
+das Tool wirft aber nur die ehrliche `IllegalStateException` beim Call). Konsistenter:
+`toolSpecifications` lässt `compactSession` weg, wenn `agent == null` — spart Token und den
+Fehlaufruf. Mit Bug-A-Fix zusammen behandelbar.
+
+## ⏳ StreamingBridge/ApiRetry geteilt über toBuilder — parallele Nested-Calls racen (Da-Dok/Mek-Nebenbefund 2026-09-27, ADR-0058)
+
+Der Nested-Request erbt den stateful `StreamingBridge` + `ApiRetry` des Parents — sequenziell
+harmlos, zwei **parallele** Nested-Calls würden um latch/responseRef konkurrieren. Heute gibt es
+keinen parallelen Sub-Call (alle Agent-Tools blockieren), Revisit mit
+[async-agent-tools-proposal.md](async-agent-tools-proposal.md).
+
+## ❓ Header: Jon-Context-Größe bleibt „0k estimate" (2026-09-27, Paul, Smoke)
+
+IST (Da Dok): Roster-Refresh ist event-getrieben (`AIChatView:336-340` via `onTokenUsage`) — ein
+Turn ohne echte Provider-Usage feuert das Event nicht → Jon bleibt auf „0k estimate" stehen, bis
+ein anderes Event refreshed; andere Agenten (mit Provider-Usage) aktualisieren. SOLL-Frage an
+Paul: Estimate-Pfad zusätzlich in den Roster-Refresh aufnehmen (Update auch ohne
+Provider-Usage)? Verdacht-Update („rendern wir nicht alle Agenten") damit eingeschränkt: es
+rendert alles, aber nur bei Event.
+
+## ❓ Test-Fixture-Drift: `test_project` enthält pom.xml + Dockerfile (2026-09-27, Da-Mek-Smoke)
+
+[test-setup.md](test-setup.md):20-21 sagt SOLL = „minimal" (.project, .classpath, src/), aber
+`test_project` enthält auch `pom.xml` und `Dockerfile` (Test-Output bin/, target/, data/ sind laut
+Doc legitim). README-Zeile „nicht als echtes Projekt benutzen" irreführend — es muss als echtes
+Eclipse-Projekt ladbar sein, der Punkt ist nur, dass man nicht in ihm entwickelt. Entscheidung
+offen: (a) Fixture behalten + Doc-SOLL anpassen, oder aufräumen; (b) README-Zeile korrigieren
+(„Test-Fixture — ladbar, aber nicht hier developen; `peon.test.project` überschreibt den Pfad").
+Da-Mek-Empfehlung: (a) behalten + Doc anpassen, (b) ja.
 
 ## ⏳ Eclipse-Installationsfehler User — Issue #142
 

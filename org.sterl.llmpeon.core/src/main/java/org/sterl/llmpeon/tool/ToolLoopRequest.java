@@ -5,7 +5,7 @@ import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 import org.sterl.llmpeon.agent.AiAgent;
-import org.sterl.llmpeon.agent.CompactResult;
+import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -27,7 +27,12 @@ import lombok.NonNull;
  * Command object for {@link ToolService#executeLoop(ToolLoopRequest)}.
  * Required fields: {@code memory} and {@code model}. The {@code bridge} has a default value.
  * All other fields have sensible defaults.
- * 
+ *
+ * <p><b>WARNING (R-CC-15):</b> {@code toBuilder()} inherits <b>every</b> field of the source request —
+ * including {@code agent} and {@code memory}. A nested request (e.g. a sub-agent loop) MUST override
+ * both explicitly: inheriting the parent's {@code agent} lets a sub-loop {@code compactSession}
+ * clear/re-seed the PARENT memory, and inheriting {@code memory} would corrupt the parent history.
+ *
  * Keep in mind any change to the message history may kill the kv cache!!
  * https://github.com/sterlp/eclipse-peon-ai/issues/60
  * 
@@ -90,9 +95,9 @@ public class ToolLoopRequest {
     /**
      * Sticky flag: a compact already succeeded in this turn. Set by
      * {@link org.sterl.llmpeon.tool.tools.CompactSessionTool} on
-     * {@link CompactResult#COMPACTED}, read by {@link ToolService#executeLoop(ToolLoopRequest)}
+     * {@link CompactResult.Status#COMPACTED}, read by {@link ToolService#executeLoop(ToolLoopRequest)}
      * to decide the post-compact counter re-derive (R-CC-2). Sticky-OR — a later
-     * {@link CompactResult#SKIPPED_SMALL} in the same turn does not clear it. Fresh per turn
+     * {@link CompactResult.Status#SKIPPED_SMALL} in the same turn does not clear it. Fresh per turn
      * (this object is rebuilt per message).
      */
     private boolean compactedThisTurn;
