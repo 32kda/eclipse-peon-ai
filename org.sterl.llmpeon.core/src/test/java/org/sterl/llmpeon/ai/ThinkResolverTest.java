@@ -6,66 +6,43 @@ import org.junit.jupiter.api.Test;
 
 class ThinkResolverTest {
 
-    private static final String[] OFF = {null, "", "  ", "false", "off", "no", "none", "FALSE", "Off"};
-
+    // UC-THINK-1
     @Test
-    void offValuesMapToGenericOmitValues() {
-        for (var v : OFF) {
-            assertThat(ThinkResolver.toReasoningEffort(v)).as("effort %s", v).isNull();
-            assertThat(ThinkResolver.toOnOff(v)).as("onOff %s", v).isNull();
-            assertThat(ThinkResolver.toBoolean(v)).as("bool %s", v).isNull();
-            assertThat(ThinkResolver.isOn(v)).as("isOn %s", v).isFalse();
-        }
-    }
-
-    @Test
-    void truthyValuesMapToHigh() {
-        for (var v : new String[] {"true", "on", "yes", "TRUE"}) {
-            assertThat(ThinkResolver.toReasoningEffort(v)).isEqualTo("high");
-            assertThat(ThinkResolver.toOnOff(v)).isEqualTo("on");
-            assertThat(ThinkResolver.toBoolean(v)).isTrue();
-            assertThat(ThinkResolver.isOn(v)).isTrue();
-        }
-    }
-
-    @Test
-    void explicitLevelsPassThrough() {
-        for (var v : new String[] {"high", "medium", "low", "minimal"}) {
-            assertThat(ThinkResolver.toReasoningEffort(v)).isEqualTo(v);
-            assertThat(ThinkResolver.toOnOff(v)).isEqualTo("on");
-            assertThat(ThinkResolver.toBoolean(v)).isTrue();
-            assertThat(ThinkResolver.isOn(v)).isTrue();
-        }
-        // normalization
-        assertThat(ThinkResolver.toReasoningEffort("HIGH")).isEqualTo("high");
-        assertThat(ThinkResolver.toReasoningEffort(" Medium ")).isEqualTo("medium");
-    }
-
-    @Test
-    void effectiveThink_autoMode_bothEmpty() {
-        // both strings empty -> auto: "true" marker when supported, "" when unsupported
-        assertThat(ThinkResolver.effectiveThink(true, "", "")).isEqualTo("true");
-        assertThat(ThinkResolver.effectiveThink(true, null, null)).isEqualTo("true");
-        assertThat(ThinkResolver.effectiveThink(false, "", "")).isEqualTo("");
-    }
-
-    @Test
-    void effectiveThink_manualMode_anyStringSet_disablesHeuristic() {
-        // on-string set -> verbatim when on; off empty -> "" when off
-        assertThat(ThinkResolver.effectiveThink(true, "high", "")).isEqualTo("high");
-        assertThat(ThinkResolver.effectiveThink(false, "high", "")).isEqualTo("");
-        // off-string set -> manual: on empty -> "" (no heuristic), off verbatim
-        assertThat(ThinkResolver.effectiveThink(true, "", "false")).isEqualTo("");
-        assertThat(ThinkResolver.effectiveThink(false, "", "false")).isEqualTo("false");
-    }
-
-    @Test
-    void toOllamaThink_distinguishesUnsetFromOff() {
+    void toOllamaThink_unsetOrBlankIsOmitted() {
         assertThat(ThinkResolver.toOllamaThink(null)).isNull();
-        assertThat(ThinkResolver.toOllamaThink("")).isEqualTo(Boolean.FALSE);
-        assertThat(ThinkResolver.toOllamaThink("false")).isEqualTo(Boolean.FALSE);
-        assertThat(ThinkResolver.toOllamaThink("none")).isEqualTo(Boolean.FALSE);
-        assertThat(ThinkResolver.toOllamaThink("true")).isEqualTo(Boolean.TRUE);
-        assertThat(ThinkResolver.toOllamaThink("high")).isEqualTo(Boolean.TRUE);
+        assertThat(ThinkResolver.toOllamaThink("")).isNull();
+        assertThat(ThinkResolver.toOllamaThink("   ")).isNull();
+    }
+
+    // UC-THINK-3
+    // UC-THINK-12
+    @Test
+    void toOllamaThink_offTokensSendFalse_onSendsTrue() {
+        // toggle-off tokens (incl. German "nein", case-insensitive) -> false
+        for (var off : new String[] {"false", "FALSE", "none", "no", "off", " Off ", "nO", "nein", "NEIN"}) {
+            assertThat(ThinkResolver.toOllamaThink(off)).as("off %s", off).isEqualTo(Boolean.FALSE);
+        }
+        // everything else (incl. "ja" and arbitrary values) -> true
+        for (var on : new String[] {"true", "high", "on", "yes", "minimal", "ja", "Ja", "banana"}) {
+            assertThat(ThinkResolver.toOllamaThink(on)).as("on %s", on).isEqualTo(Boolean.TRUE);
+        }
+    }
+
+    // UC-THINK-3
+    @Test
+    void isOff_isOn_keepFrozenTokens() {
+        // the shared off vocabulary is frozen (isThinkSupported consumers + Anthropic generic-on)
+        for (var off : new String[] {"false", "off", "no", "none", ""}) {
+            assertThat(ThinkResolver.isOff(off)).as("isOff %s", (Object) off).isTrue();
+        }
+        for (var on : new String[] {"true", "on", "yes", "high"}) {
+            assertThat(ThinkResolver.isOn(on)).as("isOn %s", on).isTrue();
+        }
+        // case-insensitive
+        assertThat(ThinkResolver.isOff("FALSE")).isTrue();
+        assertThat(ThinkResolver.isOff("Off")).isTrue();
+        // "nein" is a TOGGLE-only off-token, NOT part of the shared OFF set (the §2.2 boundary)
+        assertThat(ThinkResolver.isOff("nein")).isFalse();
+        assertThat(ThinkResolver.isOn("nein")).isTrue();
     }
 }

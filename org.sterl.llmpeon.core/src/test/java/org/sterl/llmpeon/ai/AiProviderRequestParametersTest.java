@@ -37,6 +37,17 @@ class AiProviderRequestParametersTest {
         return LlmProviders.of(p).newRequestParameters(mc, List.of());
     }
 
+    // UC-THINK-11
+    @Test
+    void reasoningEffortOf_unknownValuesAreLenient() {
+        // ADR-0064 evidence: the OpenAI SDK's ReasoningEffort.of() is a lenient enum — unknown
+        // values are preserved as-is (asString), not rejected. This pins the SDK contract the
+        // verbatim OpenAI-family channel relies on.
+        assertThat(ReasoningEffort.of("true").asString()).isEqualTo("true");
+        assertThat(ReasoningEffort.of("banana").asString()).isEqualTo("banana");
+    }
+
+    // UC-THINK-7
     @Test
     void devAndPlan_thinkSupportResolveIndependently() {
         // GIVEN only the plan record carries a think value
@@ -51,9 +62,11 @@ class AiProviderRequestParametersTest {
         assertThat(cfg.searchAgentConfig().getThink()).isNull();
     }
 
+    // UC-THINK-11
     @Test
-    void openAiOfficialOmitsReasoningWhenOffOrUnsetOrFalse() {
-        for (var think : new String[] {null, "", "false", "none", "off"}) {
+    void openAiOfficialOmitsReasoningWhenUnset() {
+        // blank = unset = nothing sent (verbatim channel, ADR-0064) — off tokens are no longer omitted
+        for (var think : new String[] {null, "", "   "}) {
             var params = (OpenAiOfficialResponsesChatRequestParameters)
                     params(AiProvider.OPEN_AI_OFFICIAL, mc(AiProvider.OPEN_AI_OFFICIAL, think));
             assertThat(params.reasoningEffort()).as("think=%s", think).isNull();
@@ -69,74 +82,88 @@ class AiProviderRequestParametersTest {
         assertThat(high.reasoningEffort()).isEqualTo(ReasoningEffort.of("high"));
     }
 
+    // UC-THINK-11
     @Test
-    void openAiOfficialGenericOnUsesModelMapping() {
-        // known reasoning model -> mapped to high
-        var known = (OpenAiOfficialResponsesChatRequestParameters)
+    void openAiOfficialGenericOnSendsLiteralTrue() {
+        // verbatim (ADR-0064): a generic "true" is sent as-is, no model mapping
+        var params = (OpenAiOfficialResponsesChatRequestParameters)
                 params(AiProvider.OPEN_AI_OFFICIAL, mc(AiProvider.OPEN_AI_OFFICIAL, "gpt-5.5", "true"));
-        assertThat(known.reasoningEffort()).isEqualTo(ReasoningEffort.of("high"));
-
-        // unknown model + generic on -> send nothing
-        var unknown = (OpenAiOfficialResponsesChatRequestParameters)
-                params(AiProvider.OPEN_AI_OFFICIAL, mc(AiProvider.OPEN_AI_OFFICIAL, "kimi-k2", "true"));
-        assertThat(unknown.reasoningEffort()).isNull();
+        assertThat(params.reasoningEffort()).isEqualTo(ReasoningEffort.of("true"));
     }
 
+    // UC-THINK-11
     @Test
-    void openAiPlainUsesStringEffort() {
-        var off = (OpenAiChatRequestParameters)
-                params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "false"));
-        assertThat(off.reasoningEffort()).isNull();
+    void openAiPlainVerbatim() {
+        // verbatim (ADR-0064): the stored value is sent as-is — no mapping, no omission
+        var none = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "none"));
+        assertThat(none.reasoningEffort()).isEqualTo("none");
 
-        var on = (OpenAiChatRequestParameters)
-                params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "medium"));
-        assertThat(on.reasoningEffort()).isEqualTo("medium");
-
-        // generic on + unknown model -> nothing
-        var genericUnknown = (OpenAiChatRequestParameters)
-                params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "true"));
-        assertThat(genericUnknown.reasoningEffort()).isNull();
-    }
-
-    @Test
-    void openAiPlainGenericOnKnownModelMapsToHigh() {
         var on = (OpenAiChatRequestParameters)
                 params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "gpt-5.5", "true"));
-        assertThat(on.reasoningEffort()).isEqualTo("high");
+        assertThat(on.reasoningEffort()).isEqualTo("true");
+
+        var xhigh = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "xhigh"));
+        assertThat(xhigh.reasoningEffort()).isEqualTo("xhigh");
+
+        var medium = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "medium"));
+        assertThat(medium.reasoningEffort()).isEqualTo("medium");
+
+        var banana = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "banana"));
+        assertThat(banana.reasoningEffort()).isEqualTo("banana");
+
+        // padded value is sent as-is, no trim (mutation falsifier, ADR-0064)
+        var padded = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, " high "));
+        assertThat(padded.reasoningEffort()).isEqualTo(" high ");
+
+        // blank = unset = nothing sent
+        var blank = (OpenAiChatRequestParameters) params(AiProvider.OPEN_AI, mc(AiProvider.OPEN_AI, "   "));
+        assertThat(blank.reasoningEffort()).isNull();
     }
 
+    // UC-THINK-11
     @Test
-    void lmStudioReasoning_emptyOmits_explicitOffSendsOff_onSendsOn() {
-        // empty -> omit
-        var empty = (OpenAiChatRequestParameters)
-                params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, ""));
-        assertThat(empty.customParameters()).isNullOrEmpty();
-
-        // explicit off-token -> reasoning:off (manual off, not silence)
-        var off = (OpenAiChatRequestParameters)
-                params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, "false"));
-        assertThat(off.customParameters()).containsEntry("reasoning", "off");
-
-        var on = (OpenAiChatRequestParameters)
-                params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, "high"));
-        assertThat(on.customParameters()).containsEntry("reasoning", "high");
+    void lmStudioReasoningVerbatim() {
+        // unset/blank -> omit (no reasoning field)
+        for (var unset : new String[] {null, "", "  "}) {
+            var p = (OpenAiChatRequestParameters) params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, unset));
+            assertThat(p.customParameters()).as("unset %s", (Object) unset).isNullOrEmpty();
+        }
+        // every non-blank value is sent VERBATIM (ADR-0064): no off/on mapping, no trim, no lowercasing
+        for (var v : new String[] {"off", "false", "none", "no", "true", "on", "yes", "banana", "high", "FALSE"}) {
+            var p = (OpenAiChatRequestParameters) params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, v));
+            assertThat(p.customParameters()).as("verbatim %s", v).containsEntry("reasoning", v);
+        }
+        // padded value is sent as-is, no trim (mutation falsifier, ADR-0064)
+        var padded = (OpenAiChatRequestParameters) params(AiProvider.LM_STUDIO, mc(AiProvider.LM_STUDIO, " high "));
+        assertThat(padded.customParameters()).containsEntry("reasoning", " high ");
     }
 
+    // UC-THINK-1
     @Test
-    void ollamaThinkFlag_unsetOmits_offSendsFalse_onSendsTrue() {
-        var unset = (OllamaChatRequestParameters)
-                params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, null));
-        assertThat(unset.think()).isNull();
-
-        var off = (OllamaChatRequestParameters)
-                params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, ""));
-        assertThat(off.think()).isFalse();
-
-        var on = (OllamaChatRequestParameters)
-                params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, "true"));
-        assertThat(on.think()).isTrue();
+    void ollamaThinkFlag_unsetOrBlankOmits() {
+        for (var unset : new String[] {null, "", "  "}) {
+            var p = (OllamaChatRequestParameters) params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, unset));
+            assertThat(p.think()).as("unset %s", (Object) unset).isNull();
+        }
     }
 
+    // UC-THINK-3
+    // UC-THINK-12
+    @Test
+    void ollamaThinkFlag_offTokensSendFalse_onSendsTrue() {
+        // toggle-off tokens (incl. German "nein", case-insensitive) -> think:false
+        for (var off : new String[] {"false", "FALSE", "none", "no", "off", " Off ", "nein", "NEIN"}) {
+            var p = (OllamaChatRequestParameters) params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, off));
+            assertThat(p.think()).as("off %s", off).isFalse();
+        }
+        // everything else (incl. "ja" and arbitrary values) -> think:true
+        for (var on : new String[] {"true", "high", "on", "yes", "ja", "banana"}) {
+            var p = (OllamaChatRequestParameters) params(AiProvider.OLLAMA, mc(AiProvider.OLLAMA, on));
+            assertThat(p.think()).as("on %s", on).isTrue();
+        }
+    }
+
+    // UC-THINK-2
     @Test
     void ollamaDevThinkOff_sendsThinkFalse() {
         // GIVEN an explicit off think value on the dev record
@@ -144,14 +171,15 @@ class AiProviderRequestParametersTest {
                 .providerType(AiProvider.OLLAMA)
                 .model("gemma4:12b")
                 .modelConfigs(Map.of(AgentModelConfig.DEV,
-                        new AgentModelConfig(null, null, null, "", null, null)))
+                        new AgentModelConfig(null, null, null, "false", null, null)))
                 .build();
 
-        assertThat(cfg.devAgentConfig().getThink()).isEqualTo("");
+        assertThat(cfg.devAgentConfig().getThink()).isEqualTo("false");
         var params = (OllamaChatRequestParameters) cfg.devAgentConfig().newRequestParameters(List.of());
         assertThat(params.think()).isFalse();
     }
 
+    // UC-THINK-7
     @Test
     void ollamaUnsetStillOmitsForCompactAndSearch() {
         var cfg = LlmConfig.builder()
@@ -165,18 +193,7 @@ class AiProviderRequestParametersTest {
         assertThat(search.think()).isNull();
     }
 
-    @Test
-    void openAiThinkSupportedFalse_emptyOffOmitsReasoning() {
-        var cfg = LlmConfig.builder()
-                .providerType(AiProvider.OPEN_AI_OFFICIAL)
-                .model("kimi-k2")
-                .thinkSupported(false)
-                .build();
-
-        var params = (OpenAiOfficialResponsesChatRequestParameters) cfg.devAgentConfig().newRequestParameters(List.of());
-        assertThat(params.reasoningEffort()).isNull();
-    }
-
+    // UC-THINK-9
     @Test
     void sendThinkingTransportIndependentFromThinkValue() {
         // GIVEN an explicit off think value, but send-thinking enabled
@@ -193,6 +210,7 @@ class AiProviderRequestParametersTest {
     }
 
 
+    // UC-THINK-8
     @Test
     void anthropicGenericOnUsesModelMapping() {
         var opus = (AnthropicChatRequestParameters)

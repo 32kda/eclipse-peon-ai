@@ -28,6 +28,18 @@ public record AgentModelConfig(String url, String apiKey, String model, String t
         return new AgentModelConfig(url, apiKey, model, think, extraBody, temperature);
     }
 
+    public AgentModelConfig withThink(String think) {
+        return new AgentModelConfig(url, apiKey, model, think, extraBody, temperature);
+    }
+
+    public AgentModelConfig withExtraBody(String extraBody) {
+        return new AgentModelConfig(url, apiKey, model, think, extraBody, temperature);
+    }
+
+    public AgentModelConfig withTemperature(String temperature) {
+        return new AgentModelConfig(url, apiKey, model, think, extraBody, temperature);
+    }
+
     @Override
     public String toString() {
         return "AgentModelConfig[url=%s, apiKey=***, model=%s, think=%s, extraBody=%s, temperature=%s]"

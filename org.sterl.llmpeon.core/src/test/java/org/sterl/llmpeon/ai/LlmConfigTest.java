@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LlmConfigTest {
 
@@ -70,6 +72,105 @@ class LlmConfigTest {
 
         // WHEN / THEN — think is taken verbatim (no effectiveThink)
         assertThat(config.devAgentConfig().getThink()).isEqualTo("medium");
+    }
+
+    // UC-THINK-10
+    @ParameterizedTest
+    @ValueSource(strings = {AgentModelConfig.PO, AgentModelConfig.PLAN, AgentModelConfig.SEARCH, AgentModelConfig.COMPACT})
+    void emptyAgentThinkInheritsBaseThink(String agentId) {
+        // GIVEN the base (DEV record) carries a think value, the agent slot is empty
+        var config = LlmConfig.of(AiProvider.OLLAMA).model("base-model")
+                .modelConfigs(Map.of(
+                        AgentModelConfig.DEV, new AgentModelConfig(null, null, null, "true", null, null),
+                        agentId, AgentModelConfig.empty()))
+                .build();
+
+        // WHEN
+        var agent = switch (agentId) {
+            case AgentModelConfig.PO -> config.poAgentConfig();
+            case AgentModelConfig.PLAN -> config.planAgentConfig();
+            case AgentModelConfig.SEARCH -> config.searchAgentConfig();
+            case AgentModelConfig.COMPACT -> config.compactAgentConfig();
+            default -> throw new AssertionError(agentId);
+        };
+
+        // THEN the agent inherits the base default
+        assertThat(agent.getThink()).as(agentId).isEqualTo("true");
+    }
+
+    // UC-THINK-10
+    @Test
+    void explicitOffWinsOverBaseDefault() {
+        // GIVEN the base think is set, the agent carries an explicit off
+        var config = LlmConfig.of(AiProvider.OLLAMA).model("base-model")
+                .modelConfigs(Map.of(
+                        AgentModelConfig.DEV, new AgentModelConfig(null, null, null, "true", null, null),
+                        AgentModelConfig.SEARCH, new AgentModelConfig(null, null, null, "false", null, null)))
+                .build();
+
+        // WHEN / THEN — an explicit off wins, no fallback to the base default
+        assertThat(config.searchAgentConfig().getThink()).isEqualTo("false");
+    }
+
+    // UC-THINK-10
+    @Test
+    void bothEmptyStaysUnset() {
+        // GIVEN neither the base (DEV) nor the agent slots carry a think value
+        var config = LlmConfig.of(AiProvider.OLLAMA).model("base-model").build();
+
+        // WHEN / THEN — unset stays unset (null) for every non-dev slot
+        assertThat(config.poAgentConfig().getThink()).isNull();
+        assertThat(config.planAgentConfig().getThink()).isNull();
+        assertThat(config.searchAgentConfig().getThink()).isNull();
+        assertThat(config.compactAgentConfig().getThink()).isNull();
+    }
+
+    // UC-THINK-10
+    @Test
+    void devDoesNotInheritItself() {
+        // GIVEN the DEV record has no think value
+        var config = LlmConfig.of(AiProvider.OLLAMA).model("base-model").build();
+
+        // WHEN / THEN — dev stays verbatim (no self-fallback)
+        assertThat(config.devAgentConfig().getThink()).isNull();
+    }
+
+
+
+    // UC-THINK-5
+    @Test
+    void thinkSupportedIsDerivedFromDevThinkValue() {
+        // GIVEN a dev record with a generic on value
+        var on = LlmConfig.of(AiProvider.OLLAMA).model("base-model")
+                .modelConfigs(Map.of(AgentModelConfig.DEV,
+                        new AgentModelConfig(null, null, null, "true", null, null)))
+                .build();
+        assertThat(on.isThinkSupported()).isTrue();
+
+        // WHEN the dev think value is unset or an explicit off token
+        var unset = LlmConfig.of(AiProvider.OLLAMA).model("base-model").build();
+        var off = LlmConfig.of(AiProvider.OLLAMA).model("base-model")
+                .modelConfigs(Map.of(AgentModelConfig.DEV,
+                        new AgentModelConfig(null, null, null, "off", null, null)))
+                .build();
+
+        // THEN there is no separate capability flag — off (incl. unset) means not supported
+        assertThat(unset.isThinkSupported()).isFalse();
+        assertThat(off.isThinkSupported()).isFalse();
+    }
+
+    // UC-THINK-5
+    @Test
+    void legacyThinkingEnabledKeyIsIgnoredOnLoad() {
+        // GIVEN a store with the removed base key (old base checkbox)
+        var store = new MapLlmConfigStore();
+        store.put("llm.thinkingEnabled", "true");
+
+        // WHEN loaded
+        var config = LlmConfigLoader.load(store);
+
+        // THEN the key is ignored — support derives from the (unset) dev think value
+        assertThat(config.isThinkSupported()).isFalse();
     }
 
     @Test

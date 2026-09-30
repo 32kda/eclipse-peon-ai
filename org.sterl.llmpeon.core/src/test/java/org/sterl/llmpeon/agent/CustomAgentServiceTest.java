@@ -6,10 +6,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.sterl.llmpeon.AbstractMemoryFileTest;
 import org.sterl.llmpeon.ai.AiProvider;
+import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.EffectiveConnection;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -182,6 +184,26 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         assertThat(agent(null, false, "agent-model").getAgentModelName()).isEqualTo("agent-model");
     }
 
+    // UC-DEF-2
+    @Test
+    void frontmatterEmptyModel_inheritsBaseModel() {
+        // GIVEN — a custom agent whose frontmatter model is empty; the shared config carries a base model
+        var agent = agent(null, false, null);
+
+        // WHEN / THEN — the resolved agent config inherits the base model
+        assertThat(agent.getConfig().getModel()).isEqualTo("base-model");
+    }
+
+    // UC-DEF-2
+    @Test
+    void frontmatterModelStillWins() {
+        // GIVEN — a custom agent whose frontmatter pins its own model
+        var agent = agent(null, false, "agent-model");
+
+        // WHEN / THEN — the pinned model wins over the base model
+        assertThat(agent.getConfig().getModel()).isEqualTo("agent-model");
+    }
+
     @Test
     void systemPromptContainsBody() throws Exception {
         // GIVEN
@@ -212,18 +234,123 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         assertThat(agent.getSystemPrompt()).contains(PromptLoader.withDefault(""));
     }
 
+    // UC-THINK-6
     @Test
-    void thinkSupportedCanonicalReadsCorrectly() throws Exception {
+    void canonicalThinkFalseReadsAsExplicitOff() throws Exception {
         var file = tmp.resolve("AGENT.md");
-        Files.writeString(file, "---\nname: t\nthink_supported: true\nthink_on_string: high\n---\nbody");
+        Files.writeString(file, "---\nname: t\nthink: false\n---\nbody");
 
         var agent = newAgent(file);
 
-        assertThat(agent.isThinkSupported()).isTrue();
-        assertThat(agent.getConfig().getThink()).isEqualTo("high");
+        assertThat(agent.getConfig().getThink()).isEqualTo("false");
+        assertThat(agent.isThinkSupported()).isFalse();
+    }
+
+    // UC-THINK-6
+    @Test
+    void absentThinkIsUnset() throws Exception {
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isNull();
+        assertThat(agent.isThinkSupported()).isFalse();
+    }
+
+    // UC-THINK-10
+    @Test
+    void customAgentWithoutThinkInheritsBaseDefault() {
+        // GIVEN a base config whose DEV record carries a think value, an AGENT.md without think
+        var cfg = LlmConfig.builder().providerType(AiProvider.OLLAMA).model("base-model")
+                .modelConfigs(Map.of(AgentModelConfig.DEV,
+                        new AgentModelConfig(null, null, null, "true", null, null)))
+                .build();
+        var agent = newAgentWith(cfg, "name: t");
+
+        // WHEN / THEN — the blank frontmatter inherits the base default
+        assertThat(agent.getConfig().getThink()).isEqualTo("true");
     }
 
 
+    // UC-THINK-6
+    @Test
+    void canonicalThinkHighReadsAsOn() throws Exception {
+        // GIVEN an AGENT.md with canonical `think: high` in frontmatter
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink: high\n---\nbody");
+
+        // WHEN the agent is loaded (no write)
+        var agent = newAgent(file);
+
+        // THEN the canonical value is read verbatim
+        assertThat(agent.getConfig().getThink()).isEqualTo("high");
+        assertThat(agent.isThinkSupported()).isTrue();
+    }
+
+    // UC-THINK-6
+    @Test
+    void legacyThinkOnStringReadsAsThink() throws Exception {
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink_on_string: high\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isEqualTo("high");
+        assertThat(agent.isThinkSupported()).isTrue();
+    }
+
+    // UC-THINK-6
+    @Test
+    void legacyThinkSupportedFalseDerivesExplicitOff() throws Exception {
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink_supported: false\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isEqualTo("false");
+        assertThat(agent.isThinkSupported()).isFalse();
+    }
+
+    // UC-THINK-6
+    @Test
+    void legacyThinkEnabledTrueDerivesGenericOn() throws Exception {
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink_enabled: true\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isEqualTo("true");
+        assertThat(agent.isThinkSupported()).isTrue();
+    }
+
+    // UC-THINK-6
+    @Test
+    void legacyThinkOffStringReadsAsThink() throws Exception {
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink_off_string: none\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isEqualTo("none");
+        assertThat(agent.isThinkSupported()).isFalse();
+    }
+
+    // UC-THINK-6
+    @Test
+    void legacyOnStringWinsOverSupportedFalse() throws Exception {
+        // Q1: a concrete level is the more specific user intent
+        var file = tmp.resolve("AGENT.md");
+        Files.writeString(file, "---\nname: t\nthink_supported: false\nthink_on_string: high\n---\nbody");
+
+        var agent = newAgent(file);
+
+        assertThat(agent.getConfig().getThink()).isEqualTo("high");
+        assertThat(agent.isThinkSupported()).isTrue();
+    }
+
+
+    // UC-THINK-6
     @Test
     void legacyKeysNotMigratedOnLoadOnlyOnWrite() throws Exception {
         // GIVEN an AGENT.md with legacy `think_enabled: true` in frontmatter
@@ -241,42 +368,33 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         assertThat(agent.isThinkSupported()).isTrue();
     }
 
+    // UC-THINK-6
     @Test
-    void legacyKeysMigratedOnWrite() throws Exception {
-        // GIVEN an AGENT.md with legacy `think_enabled: true` in frontmatter
+    void legacyKeysMigrateToThinkOnWrite() throws Exception {
+        // GIVEN an AGENT.md with legacy think keys in frontmatter
         var file = tmp.resolve("AGENT.md");
-        Files.writeString(file, "---\nname: t\nthink_enabled: true\n---\nbody");
+        Files.writeString(file, "---\nname: t\nthink_supported: true\nthink_on_string: high\nthink_off_string: none\n---\nbody");
 
         // WHEN the agent is loaded and a write operation occurs
         var agent = newAgent(file);
         agent.setAgentModelName("m1");
 
-        // THEN the file is migrated with new keys
+        // THEN the file contains only the canonical think (all legacy keys removed)
         String saved = Files.readString(file);
-        assertThat(saved).contains("think_supported: true");
+        assertThat(saved).contains("think: high");
+        assertThat(saved).doesNotContain("think_supported");
         assertThat(saved).doesNotContain("think_enabled");
+        assertThat(saved).doesNotContain("think_on_string");
+        assertThat(saved).doesNotContain("think_off_string");
         // AND the model change is also persisted
         assertThat(saved).contains("model: m1");
     }
 
 
+    // UC-THINK-6
     @Test
-    void legacyThinkReadsCorrectlyBeforeMigration() throws Exception {
-        // GIVEN an AGENT.md with legacy `think: high` in frontmatter
-        var file = tmp.resolve("AGENT.md");
-        Files.writeString(file, "---\nname: t\nthink: high\n---\nbody");
-
-        // WHEN the agent is loaded (no write)
-        var agent = newAgent(file);
-
-        // THEN the legacy key is read correctly via backward compat
-        assertThat(agent.getConfig().getThink()).isEqualTo("high");
-        assertThat(agent.isThinkSupported()).isTrue();
-    }
-
-    @Test
-    void legacyThinkMigratesOnWrite() throws Exception {
-        // GIVEN an AGENT.md with legacy `think: high` in frontmatter
+    void canonicalThinkStaysOnWrite() throws Exception {
+        // GIVEN an AGENT.md with canonical `think: high` in frontmatter
         var file = tmp.resolve("AGENT.md");
         Files.writeString(file, "---\nname: t\nthink: high\n---\nbody");
 
@@ -284,28 +402,16 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         var agent = newAgent(file);
         agent.setAgentModelName("m1");
 
-        // THEN the file is saved with the new keys (think implies enabled)
+        // THEN the canonical think stays (no legacy keys introduced)
         String saved = Files.readString(file);
-        assertThat(saved).contains("think_on_string: high");
-        assertThat(saved).contains("think_supported: true");
-        assertThat(saved).doesNotContain("think:");
+        assertThat(saved).contains("think: high");
+        assertThat(saved).doesNotContain("think_supported");
+        assertThat(saved).doesNotContain("think_on_string");
     }
 
+    // UC-THINK-6
     @Test
-    void legacyThinkEnabledReadsCorrectlyBeforeMigration() throws Exception {
-        // GIVEN an AGENT.md with legacy `think_enabled: true` in frontmatter
-        var file = tmp.resolve("AGENT.md");
-        Files.writeString(file, "---\nname: t\nthink_enabled: true\n---\nbody");
-
-        // WHEN the agent is loaded (no write)
-        var agent = newAgent(file);
-
-        // THEN the legacy key is read correctly via backward compat
-        assertThat(agent.isThinkSupported()).isTrue();
-    }
-
-    @Test
-    void legacyThinkEnabledMigratesOnWrite() throws Exception {
+    void legacyThinkEnabledMigratesToThinkOnWrite() throws Exception {
         // GIVEN an AGENT.md with legacy `think_enabled: true` in frontmatter
         var file = tmp.resolve("AGENT.md");
         Files.writeString(file, "---\nname: t\nthink_enabled: true\n---\nbody");
@@ -314,15 +420,16 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         var agent = newAgent(file);
         agent.setAgentModelName("m1");
 
-        // THEN the file is saved with the new key
+        // THEN the file is saved with the canonical think
         String saved = Files.readString(file);
-        assertThat(saved).contains("think_supported: true");
+        assertThat(saved).contains("think: true");
         assertThat(saved).doesNotContain("think_enabled");
     }
 
+    // UC-THINK-6
     @Test
-    void legacyThinkAndEnabledMigrateTogetherOnWrite() throws Exception {
-        // GIVEN an AGENT.md with both legacy keys
+    void canonicalThinkShadowsLegacyKeysOnWrite() throws Exception {
+        // GIVEN an AGENT.md with canonical think plus a shadowed legacy key
         var file = tmp.resolve("AGENT.md");
         Files.writeString(file, "---\nname: t\nthink: high\nthink_enabled: true\n---\nbody");
 
@@ -330,11 +437,9 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
         var agent = newAgent(file);
         agent.setAgentModelName("m1");
 
-        // THEN both are migrated
+        // THEN canonical think stays, the shadowed legacy key is removed
         String saved = Files.readString(file);
-        assertThat(saved).contains("think_supported: true");
-        assertThat(saved).contains("think_on_string: high");
-        assertThat(saved).doesNotContain("think:");
+        assertThat(saved).contains("think: high");
         assertThat(saved).doesNotContain("think_enabled");
     }
 

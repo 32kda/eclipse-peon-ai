@@ -2,6 +2,14 @@
 
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
 Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.md).
+## ❓ Per-Agent Provider Override (2026-09-28, Paul identifiziert — Story angenommen, noch nicht geplant)
+
+IST: nur der Base besitzt einen Provider (`EffectiveConnection.java:13`, Entscheidung 2026-08-28);
+Advanced-Page und Custom-Agent-Frontmatter kennen kein `provider`-Key. Ein Custom-Agent mit
+URL-Override läuft immer gegen die Base-Provider-API-Semantik — bricht bei inkompatiblen APIs.
+Paul entschied (Option A): eigener Zyklus **nach** dem ModelConfigWidget-Zyklus. Offen bei Planung:
+Advanced-Feld, Frontmatter-Key `provider`, oder beides. Kontext: [model-config-widget.md](model-config-widget.md) R-MCW-5.
+
 
 ## ❓ test_project-Fixture: „minimal" SOLL vs. IST-Inhalt (2026-09-27, searchAgent-Freshness-Check)
 
@@ -225,3 +233,30 @@ Da-Mek-Empfehlung: (a) behalten + Doc anpassen, (b) ja.
 Analyse korrigiert (2026-09-19): unser p2-Repo liefert asm 9.10.1 mit (includeAllDependencies).
 Fix-Kandidaten + Follow-ups: [issue-142-asm-conflict.md](issue-142-asm-conflict.md). Nachzuholen
 bei Pauls Zustimmung: Mindest-Eclipse-Version auf der Homepage nennen.
+## ⏳ Think-BDD-Lücken (2026-09-27, Da-Dok-Provider-Think-Audit, Issue-#149-Zyklus)
+
+Aus dem Audit registriert, bewusst nicht in Inc-4 (Scope-Dispositionen):
+(a) Gemini buildModel-Thinking-Branch ungetestet (einziger Konsument der R-THINK-5-Ableitung);
+(b) OpenAI-Familie-Off-Test fehlt `FALSE`/`No`/` Off `-Varianten; (c) GITHUB_COPILOT/GITHUB_MODELS
+ohne Request-Param-Tests; (d) Anthropic konkret-Level-Pfad (Budget 8000) + unknown string ungetestet;
+(e) LM Studio extra_body-reasoning-Override-Interaktion; (f) OPEN_AI_OFFICIAL reasoningSummary=DETAILED
+nie asserted; (g) custom-agent×OpenAI-Familie nur Signatur-Smoke. Plus: `ThinkModelMapping.Entry.off`
+wird geparst, aber ungenutzt (Inc-4-Scope war nur `resolveOff`+`find`); `AiAgent.isThinkEnabled()`
+(deprecated Default) Kandidat fürs nächste Sterben-Inkrement.
+
+## 🔒 User-Smoke Issue #149 (2026-09-27, Paul — ✅ 2026-09-30)
+
+Paul-Smoke erfolgreich (2026-09-30, gemeinsamer Smoke aller Zyklen): Ollama-Dropdown (""/true/false)
+in der Advanced-Page, Basis-Checkbox weg, `think:false` im Debug-Log bei `false`, Custom-Agent
+Legacy-Frontmatter — bestätigt.
+
+
+- ⏳ **TrimService-Story (Paul, 2026-09-29, für den nächsten „Architecture & Bug Sprint"):** Head/Tail/Trim ist ein wiederkehrendes Konzept, das in der ganzen Codebasis repliziert wird (ShellTool-Tail, Compact-Stufenkürzung, Tool-Output-Caps, Log-Auszug, webFetch-Paging) → als eigene Story aufnehmen, gemeinsame Klasse (Arbeitstitel `TrimService`/`TrimmedResult`): eine Stelle, die kürzt + disclosed. **Konvention mit in die Docs:** Zeilen zählen/zusammensetzen im Trim-Pfad mit **literal `\n`** statt `lineSeparator()` — plattformunabhängig, funktioniert immer (Paul: „einfach und sehr richtig"); das Konzept soll in `TrimmedResult.toString` dokumentiert sein (verfeinert Memory-Regel 7 für Trim-/Tail-Pfade). Grundlage: `ShellTool.java` (Tail) · Verwandtes: `LogExcerpt`, `TextFileTypes`, Compact-Input-Budget, Tool-Output-Disclosure.
+
+
+- ❓ **Compact-Button ohne Monitor (Paul, 2026-09-29):** User-getriggerter Compact am Agenten übergibt scheinbar keinen Monitor — UI zeigt nichts an, während der Compressor läuft (Da Mek bleibt „grün", erst danach sieht man den Context-Load). Feedback-Loch im Compact-Pfad. Verwandt: compact-lock / agenten-status-im-header.
+- ❓ **Auto-Compact bei Context-Overflow (Paul, 2026-09-29, Todo):** wenn der Request das Context-Fenster überschreitet (`exceed_context_size_error`, Fall Da Mek: 431005 tokens vs. n_ctx 170240 nach einem aufgeblähten Tool-Ergebnis), muss der Agent **selbst** compacten statt hart zu sterben — aktuell stirbt der Call (bekannter Dreiklang aus open-to-discuss.md: Hint-Dedup, ApiRetry auf totem Payload, stille Cancellation). Verdacht: ein Tool-Ergebnis hat den Context gesprengt (Letzter Call grep „MUTATION" in `*` — trotzdem klären, welches Ergebnis 400k+ getragen hat). **Fall 2+3 (2026-09-29, Da Thinka, gleicher Tag):** `planWithPlanAgent` starb 2× hintereinander — **811123** → nach `clearPlan` **954149** tokens vs. 170240. Diagnostisch wichtig: (a) Clear hat NICHTS gebracht → die Flut kommt nicht aus dem Agent-Memory, sondern aus der per-Request-Injektion (Static-Context/Workspace-Memory/Standing-Orders); (b) das Wachstum 811k→954k (~143k ≈ ein Tool-Result) deutet darauf, dass jeder fehlgeschlagene Versuch etwas in den Payload nachschiebt. Gleiches Muster wie der Mek-Fall — derselbe Root Cause zu vermuten. Stack der beiden Thinka-Cases: `PeonAiService.call:523` → `ToolService.executeLoop:159` → `SmartToolExecutor.run:40` (Sub-Agent-Tool wirft den 400 des Nested-Calls).
+- ❓ **Docs-Linter kennt keinen Status für ☠️ superseded (2026-09-29, Jon):** der DocParser erkennt nur ✅/❌/🚧 (`statusFromEmoji`, `DocParser.java:209-216`) — nach dem Rework mussten die historischen UC-DEF-4/5/7-Headings in [default-inheritance.md](default-inheritance.md) zu Fließtext degradiert werden, weil ein `####`-UC-Heading mit `☠️` zwangsläufig `STATUS_FEHLT` wirft. Kandidat: ☠️-Status im DocParser (Info statt Finding, kein UNBELEGT). Sonst bleibt "superseded" nur in `###`-Regel-Headings darstellbar.
+- ⏳ **SwtUtil.setExcluded-Extract (Da-Dok G2, 2026-09-29):** SWT-Idiom `exclude`+`setVisible` 3× dupliziert (2× im Widget-Rework R-DEF-9…11 + `McpPreferenceView`) — Extraktions-Kandidat. Review-Befunde G1–G6 im Plan §11 (archiviert).
+- ⏳ **Dead Code: `ModelConfigWidget` 4-Arg-Konstruktor (Da Mek, 2026-09-29):** `labelStyle`-Parameter + SWT.END-Zweig sind seit der DEV-Sektions-Entfernung (R-DEF-10) caller-less — Cleanup-Kandidat beim nächsten Widget-Berührungs-Kontakt.
+- ⏳ **Inc-2-Zähler-Abweichung (Da Mek, 2026-09-29, akzeptiert):** Plan §5 sagte „rendered 24→28" — mit dem eigenen 2-Spalten-Grid-Wrapper (D6, Muster `addDevSection`) stehen die Page-Editors nicht mehr im gezählten Parent. IST: 14 (OLLAMA) / 17 (OpenAI, +3 Extra-Body-Kontrollen). Struktur folgt D6/ADR-0063, Zähler im Plan-Status vermerkt — keine Aktion nötig, Vermerk fürs Review.

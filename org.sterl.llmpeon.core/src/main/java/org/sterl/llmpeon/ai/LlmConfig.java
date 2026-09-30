@@ -12,6 +12,8 @@ import java.util.Map;
 
 import org.sterl.llmpeon.ai.model.AiModel;
 import org.sterl.llmpeon.provider.LlmProviders;
+import org.sterl.llmpeon.provider.LmStudioProvider;
+import org.sterl.llmpeon.provider.OllamaProvider;
 import org.sterl.llmpeon.shared.StringUtil;
 
 import lombok.AllArgsConstructor;
@@ -66,12 +68,6 @@ public class LlmConfig {
      */
     @Default
     private final int maxTokens = 0;
-    /**
-     * Base/dev model capability. Drives build-time thinking for Gemini/Mistral and the returnThinking
-     * context only — the per-agent think value itself now lives in {@link #modelConfigs}.
-     */
-    @Default
-    private final boolean thinkSupported = false;
     /** Global "send thinking back" (build-time). */
     @Default
     private final boolean sendThinkingEnabled = true;
@@ -108,9 +104,12 @@ public class LlmConfig {
         return configDir.resolve("state");
     }
 
-    /** Dev/default model thinking support (drives build-time thinking for Gemini/Mistral and returnThinking). */
+    /**
+     * Dev/default model thinking support, derived from the dev think value (ADR-0059: there is no
+     * separate capability flag) — drives build-time thinking for Gemini and returnThinking.
+     */
     public boolean isThinkSupported() {
-        return thinkSupported;
+        return !ThinkResolver.isOff(modelConfigFor(AgentModelConfig.DEV).think());
     }
 
     /** Resend prior thinking to the model. */
@@ -124,12 +123,12 @@ public class LlmConfig {
     
     public static LlmConfig newOllama(String model) {
         return LlmConfig.builder().providerType(AiProvider.OLLAMA)
-                .model(model).url("http://localhost:11434").build();
+                .model(model).url(OllamaProvider.DEFAULT_BASE_URL).build();
     }
     
     public static LlmConfig newLmStudio(String model) {
         return LlmConfig.builder().providerType(AiProvider.LM_STUDIO)
-                .model(model).url("http://localhost:1234/v1").build();
+                .model(model).url(LmStudioProvider.DEFAULT_BASE_URL).build();
     }
     
     public static LlmConfig newOpenAi(String model) {
@@ -198,48 +197,66 @@ public class LlmConfig {
                 .think(dev.think()).build();
     }
 
-    /** PO agent — model falls back to base; remaining fields come from its own record. */
+    /**
+     * Think resolution (R-THINK-10, ADR-0061): an explicit agent value (incl. off) wins verbatim;
+     * a blank agent value inherits the base default from the dev record; only when both are blank
+     * does the value stay unset. The dev slot never falls back to itself.
+     */
+    private String resolveThink(AgentModelConfig record) {
+        return StringUtil.hasValue(record.think()) ? record.think() : modelConfigFor(AgentModelConfig.DEV).think();
+    }
+
+    /**
+     * Model resolution (R-DEF-1/2, ADR-0062): an explicit slot model wins verbatim; a blank slot
+     * model inherits the base model. The dev slot never resolves through this (it IS the base).
+     */
+    private String resolveModel(String slotModel) {
+        return StringUtil.hasValue(slotModel) ? slotModel : model;
+    }
+
+    /** PO agent — a blank model inherits the base model; remaining fields come from its own record. */
     public AgentConfig poAgentConfig() {
         var po = modelConfigFor(AgentModelConfig.PO);
-        return agentBuilder(po).model(StringUtil.hasValue(po.model()) ? po.model() : model)
+        return agentBuilder(po).model(resolveModel(po.model()))
                 .id(AgentModelConfig.PO)
-                .think(po.think()).build();
+                .think(resolveThink(po)).build();
     }
 
-    /** Plan agent — configuration from its own record (model null = provider default). */
+    /** Plan agent — configuration from its own record (empty model inherits the base model, R-DEF-1). */
     public AgentConfig planAgentConfig() {
         var plan = modelConfigFor(AgentModelConfig.PLAN);
-        return agentBuilder(plan).model(plan.model())
+        return agentBuilder(plan).model(resolveModel(plan.model()))
                 .id(AgentModelConfig.PLAN)
-                .think(plan.think()).build();
+                .think(resolveThink(plan)).build();
     }
 
-    /** Compactor — configuration from its own record. */
+    /** Compactor — configuration from its own record (empty model inherits the base model, R-DEF-1). */
     public AgentConfig compactAgentConfig() {
         var compact = modelConfigFor(AgentModelConfig.COMPACT);
-        return agentBuilder(compact).model(compact.model())
+        return agentBuilder(compact).model(resolveModel(compact.model()))
                 .id(AgentModelConfig.COMPACT)
-                .think(compact.think()).build();
+                .think(resolveThink(compact)).build();
     }
 
-    /** Search sub-agent — configuration from its own record. */
+    /** Search sub-agent — configuration from its own record (empty model inherits the base model, R-DEF-1). */
     public AgentConfig searchAgentConfig() {
         var search = modelConfigFor(AgentModelConfig.SEARCH);
-        return agentBuilder(search).model(search.model())
+        return agentBuilder(search).model(resolveModel(search.model()))
                 .id(AgentModelConfig.SEARCH)
-                .think(search.think()).build();
+                .think(resolveThink(search)).build();
     }
 
     /**
      * Custom agent — model/url/key/extraBody from the agent's own {@code AGENT.md} frontmatter
-     * record (blank fields inherit the base, resolved by {@link EffectiveConnection}) and think from
-     * its own frontmatter triple (no inheritance). Same resolution path as the five core agents;
+     * record (blank model inherits the base model (R-DEF-2), blank url/key inherit the base,
+     * resolved by {@link EffectiveConnection}) and think from the record, inheriting the base
+     * default when blank (R-THINK-10). Same resolution path as the five core agents;
      * {@code agentId} is the agent's stable name (per-request metadata, e.g. default cache key).
      */
-    public AgentConfig customAgentConfig(AgentModelConfig rec, String agentId, boolean supported, String on, String off) {
-        return agentBuilder(rec).model(rec.model())
+    public AgentConfig customAgentConfig(AgentModelConfig rec, String agentId) {
+        return agentBuilder(rec).model(resolveModel(rec.model()))
                 .id(agentId)
-                .think(ThinkResolver.effectiveThink(supported, on, off)).build();
+                .think(resolveThink(rec)).build();
     }
 
     public LlmConfig withModel(String model) {

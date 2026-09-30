@@ -3,7 +3,6 @@ package org.sterl.llmpeon.parts.config.widgets;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
@@ -13,7 +12,6 @@ import java.util.function.Supplier;
 
 import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.LlmConfig;
-import org.sterl.llmpeon.provider.ExtraBodyExamples;
 import org.sterl.llmpeon.provider.LlmProviders;
 import org.sterl.llmpeon.provider.ThinkSupport;
 import org.sterl.llmpeon.provider.ThinkValueSupport;
@@ -45,11 +43,10 @@ public class AgentModelConfigSection extends Composite {
     private final Text keyText;
     private final ModelComboWidget modelWidget;
     private final Text temperatureText;
-    private Text jsonText;
-    private Label examplesLabel;
+    private final boolean extraBodySupported;
+    private final ExtraBodyWidget extraBody;
 
     // exactly one of these is non-null, per thinkForm
-    private Button thinkCheck;
     private Combo thinkCombo;
     private Text thinkText;
 
@@ -59,6 +56,7 @@ public class AgentModelConfigSection extends Composite {
         this.base = base;
         var provider = LlmProviders.of(base.get().getProviderType());
         this.thinkForm = provider.thinkSupport();
+        this.extraBodySupported = provider.supportsExtraBody();
         setLayoutData(new GridData(SWT.FILL, SWT.BEGINNING, true, false));
         var sectionLayout = new GridLayout(2, false);
         sectionLayout.marginBottom = 0;
@@ -69,7 +67,7 @@ public class AgentModelConfigSection extends Composite {
         this.modelWidget = new ModelComboWidget(this, agentId, this::prepareFetch);
         buildThink();
         this.temperatureText = addLabeledText("Temperature (empty = unset):");
-        buildJson(provider.supportsExtraBody());
+        this.extraBody = new ExtraBodyWidget(this, extraBodySupported);
     }
 
     public String getAgentId() {
@@ -83,7 +81,7 @@ public class AgentModelConfigSection extends Composite {
         modelWidget.setModel(record.model());
         loadThink(record.think());
         temperatureText.setText(StringUtil.stripToEmpty(record.temperature()));
-        if (jsonText != null) jsonText.setText(StringUtil.stripToEmpty(record.extraBody()));
+        extraBody.setBody(record.extraBody());
     }
 
     /** Reads the widgets back into a record (empty fields become null). */
@@ -93,7 +91,7 @@ public class AgentModelConfigSection extends Composite {
                 StringUtil.stripToNull(keyText.getText()),
                 StringUtil.stripToNull(modelWidget.getModel()),
                 readThink(),
-                jsonText != null ? StringUtil.stripToNull(jsonText.getText()) : null,
+                extraBodySupported ? extraBody.getExtraBody() : null, // construction gate (R-MCW-5): hidden → null, no R-DEF-11
                 StringUtil.stripToNull(temperatureText.getText()));
     }
 
@@ -116,71 +114,23 @@ public class AgentModelConfigSection extends Composite {
     // --- widget construction ---
 
     private void buildThink() {
-        if (thinkForm instanceof ThinkSupport.Boolean) {
+        if (thinkForm instanceof ThinkSupport.Toggle) {
             addLabel("Think:");
-            thinkCheck = new Button(this, SWT.CHECK);
-            thinkCheck.setText("Enabled");
-            thinkCheck.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+            thinkCombo = new Combo(this, SWT.BORDER);
+            thinkCombo.setItems(ThinkValueSupport.toggleItems().toArray(String[]::new));
+            thinkCombo.setText("");
+            thinkCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         } else if (thinkForm instanceof ThinkSupport.Values v) {
             addLabel("Think:");
             thinkCombo = new Combo(this, SWT.BORDER);
-            thinkCombo.setItems(ThinkValueSupport.valuesItems(v).toArray(String[]::new));
-            thinkCombo.select(0);
+            thinkCombo.setItems(v.values().toArray(String[]::new)); // real values, no off/auto (ADR-0064); empty → nothing selected
             thinkCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         } else if (thinkForm instanceof ThinkSupport.FreeString || thinkForm instanceof ThinkSupport.Unknown) {
-            addLabel("Think (empty = off):");
+            addLabel("Think (empty = unset):");
             thinkText = new Text(this, SWT.BORDER);
             thinkText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         }
         // ThinkSupport.None → no per-request think input, widget hidden
-    }
-
-    private void buildJson(boolean visible) {
-        if (!visible) return;
-        addLabel("Extra body (JSON):");
-        jsonText = new Text(this, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.WRAP);
-        var gd = new GridData(SWT.FILL, SWT.FILL, true, false);
-        gd.horizontalSpan = 2;
-        gd.heightHint = 80;
-        jsonText.setLayoutData(gd);
-        buildJsonExamples();
-    }
-
-    /**
-     * Paste-ready extra-body examples under the JSON input (caching.md R3): a single compact row
-     * (label + one button per example, tooltip = description) and a status label. Built only when
-     * {@code supportsExtraBody()} — the provider gate. A paste simply replaces the field content
-     * (2c D2, no dialog).
-     */
-    private void buildJsonExamples() {
-        var examples = ExtraBodyExamples.all();
-        var row = new Composite(this, SWT.NONE);
-        var rowGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        rowGd.horizontalSpan = 2;
-        row.setLayoutData(rowGd);
-        row.setLayout(new GridLayout(examples.size() + 1, false));
-        var label = new Label(row, SWT.NONE);
-        label.setText("Examples:");
-        for (var example : examples) {
-            var button = new Button(row, SWT.PUSH);
-            button.setText(example.name());
-            button.setToolTipText(example.description());
-            button.addListener(SWT.Selection, e -> pasteExample(example));
-        }
-        examplesLabel = new Label(this, SWT.NONE);
-        var labelGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        labelGd.horizontalSpan = 2;
-        labelGd.exclude = true; // no extra space until a paste happened (GridLayout only filters GridData.exclude)
-        examplesLabel.setLayoutData(labelGd);
-        examplesLabel.setVisible(false);
-    }
-
-    private void pasteExample(ExtraBodyExamples.Example example) {
-        jsonText.setText(example.json());
-        examplesLabel.setText(example.name() + " example inserted.");
-        ((GridData) examplesLabel.getLayoutData()).exclude = false;
-        examplesLabel.setVisible(true);
-        layout();
     }
 
     private Text addLabeledText(String label) {
@@ -196,16 +146,16 @@ public class AgentModelConfigSection extends Composite {
         label.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
     }
 
-    // --- think value mapping (delegates to the SWT-free helper) ---
+    // --- think value handling (values verbatim, ADR-0064; toggle items via the SWT-free helper) ---
 
     private void loadThink(String stored) {
-        if (thinkForm instanceof ThinkSupport.Boolean) {
-            thinkCheck.setSelection(ThinkValueSupport.booleanOn(stored));
+        if (thinkForm instanceof ThinkSupport.Toggle) {
+            thinkCombo.setText(StringUtil.stripToEmpty(stored));
         } else if (thinkForm instanceof ThinkSupport.Values) {
-            var display = ThinkValueSupport.valuesDisplay(stored);
-            int idx = thinkCombo.indexOf(display);
+            var v = StringUtil.stripToEmpty(stored);
+            int idx = thinkCombo.indexOf(v);
             if (idx >= 0) thinkCombo.select(idx);
-            else thinkCombo.setText(display); // unknown value → shown verbatim
+            else thinkCombo.setText(v); // verbatim, no whitelist (ADR-0064); empty → nothing selected
         } else if (thinkForm instanceof ThinkSupport.FreeString || thinkForm instanceof ThinkSupport.Unknown) {
             thinkText.setText(StringUtil.stripToEmpty(stored));
         }
@@ -213,10 +163,10 @@ public class AgentModelConfigSection extends Composite {
     }
 
     private String readThink() {
-        if (thinkForm instanceof ThinkSupport.Boolean) {
-            return ThinkValueSupport.booleanValue(thinkCheck.getSelection());
+        if (thinkForm instanceof ThinkSupport.Toggle) {
+            return StringUtil.stripToEmpty(thinkCombo.getText());
         } else if (thinkForm instanceof ThinkSupport.Values) {
-            return ThinkValueSupport.valuesStored(thinkCombo.getText());
+            return StringUtil.stripToEmpty(thinkCombo.getText());
         } else if (thinkForm instanceof ThinkSupport.FreeString || thinkForm instanceof ThinkSupport.Unknown) {
             return StringUtil.stripToEmpty(thinkText.getText());
         }

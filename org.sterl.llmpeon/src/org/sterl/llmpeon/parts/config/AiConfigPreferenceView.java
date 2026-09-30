@@ -1,7 +1,6 @@
 package org.sterl.llmpeon.parts.config;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
-import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.BooleanFieldEditor;
 import org.eclipse.jface.preference.ComboFieldEditor;
 import org.eclipse.jface.preference.FieldEditorPreferencePage;
@@ -10,25 +9,24 @@ import org.eclipse.jface.preference.StringFieldEditor;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionListener;
 import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
 import org.sterl.llmpeon.ai.AiProvider;
-import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.ai.AgentModelConfig;
+import org.sterl.llmpeon.ai.LlmConfigSaver;
 import org.sterl.llmpeon.parts.PeonConstants;
-import org.sterl.llmpeon.parts.config.widgets.ModelComboWidget;
-import org.sterl.llmpeon.shared.StringUtil;
+import org.sterl.llmpeon.parts.config.widgets.ModelConfigWidget;
+import org.sterl.llmpeon.parts.config.widgets.TitledGroup;
 
 public class AiConfigPreferenceView extends FieldEditorPreferencePage implements IWorkbenchPreferencePage {
 
-    private ComboFieldEditor providerEditor;
-    private StringFieldEditor urlEditor;
-    private StringFieldEditor apiKeyEditor;
-    private ModelComboWidget modelWidget;
+    private ModelConfigWidget modelConfigWidget;
 
     public AiConfigPreferenceView() {
         super(GRID);
@@ -38,32 +36,23 @@ public class AiConfigPreferenceView extends FieldEditorPreferencePage implements
 
     @Override
     public void createFieldEditors() {
-        providerEditor = new ComboFieldEditor(PeonConstants.PREF_PROVIDER_TYPE, "Provider Type:",
-                new String[][] { 
-                        { "OpenAI (llama.cpp, unsloth, OmniRoute)", AiProvider.OPEN_AI.name() },
-                        { "LM Studio (OpenAI-compatible)", AiProvider.LM_STUDIO.name() },
-                        { "Ollama", AiProvider.OLLAMA.name() },
-                        { "OpenAI-Official Azure Foundry", AiProvider.OPEN_AI_OFFICIAL.name() },
-                        { "OpenAI-GitHub Copilot (subscription)", AiProvider.GITHUB_COPILOT.name() },
-                        { "Google Gemini", AiProvider.GOOGLE_GEMINI.name() }, { "Mistral", AiProvider.MISTRAL.name() },
-                        { "Anthropic Claude", AiProvider.ANTHROPIC.name() },
-                        { "GitHub Models (PAT)", AiProvider.GITHUB_MODELS.name() } },
-                getFieldEditorParent());
-        addField(providerEditor);
-        buildModel();
+        // "Default for all agents" (R-DEF-9): the single owner of the base keys + dev slot
+        // (ADR-0063). The connection fields (provider · URL · API key · model · think · temperature
+        // · extra body) plus Ping live in the ModelConfigWidget: Ping and Reload read the widget's
+        // live values, only OK/Apply persists.
+        var group = new TitledGroup(getFieldEditorParent(), "Default for all agents");
+        // The titled group's inner group is a single-column grid; the widget contract needs a 2-column grid.
+        var grid = new Composite(group.getGroup(), SWT.NONE);
+        grid.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        grid.setLayout(new GridLayout(2, false));
+        modelConfigWidget = new ModelConfigWidget(grid, "base", LlmPreferenceInitializer::buildWithDefaults);
+        modelConfigWidget.load(storeValues());
+        modelConfigWidget.fetchModels();
 
         addField(new IntegerFieldEditor(PeonConstants.PREF_TOKEN_WINDOW, "Auto compact after:", getFieldEditorParent()));
 
-        addField(new BooleanFieldEditor(PeonConstants.PREF_THINK_SUPPORTED, "Default model supports thinking", getFieldEditorParent()));
         addField(new BooleanFieldEditor(PeonConstants.PREF_SEND_THINKING_ENABLED,
-                "Show and resend model thinking - needed by some LLMs like Qwen 3.6, Mistral, DeepSeek", getFieldEditorParent()));
-
-        urlEditor = new StringFieldEditor(PeonConstants.PREF_URL, "URL (incl. port):", getFieldEditorParent());
-        addField(urlEditor);
-        buildCheckUrl();
-
-        apiKeyEditor = new StringFieldEditor(PeonConstants.PREF_API_KEY, "API Key:", getFieldEditorParent());
-        addField(apiKeyEditor);
+                "Resend model thinking - needed by most LLMs like Qwen 3.x, Mistral, DeepSeek", getFieldEditorParent()));
 
         buildGithubLogin();
 
@@ -91,42 +80,50 @@ public class AiConfigPreferenceView extends FieldEditorPreferencePage implements
     }
 
     /**
-     * Model dropdown + refresh (shared with the advanced page's per-agent sections). The
-     * snapshot provider reads the preferences live, so changing provider/url/key on this page
-     * keeps the fetch identity current (the widget's stale-guard discards stale results).
+     * The widget's values from the store — single load point, also used to reload the widget
+     * after the GitHub login flow (the flow writes provider + key directly to the store).
      */
-    private void buildModel() {
-        // ModelComboWidget contract: label before the widget (JFace Field-Editor default: SWT.LEFT, no GridData)
-        var label = new Label(getFieldEditorParent(), SWT.LEFT);
-        label.setText("Model:");
-        modelWidget = new ModelComboWidget(getFieldEditorParent(), "base",
-                () -> ModelComboWidget.baseSnapshot(LlmPreferenceInitializer.buildWithDefaults()));
-        modelWidget.setModel(getPreferenceStore().getString(PeonConstants.PREF_MODEL));
-        modelWidget.fetchModels();
+    private ModelConfigWidget.ConnectionValues storeValues() {
+        var store = getPreferenceStore();
+        var devRecord = LlmPreferenceInitializer.buildWithDefaults().modelConfigFor(AgentModelConfig.DEV);
+        return new ModelConfigWidget.ConnectionValues(providerOrNull(store.getString(PeonConstants.PREF_PROVIDER_TYPE)),
+                store.getString(PeonConstants.PREF_URL), store.getString(PeonConstants.PREF_API_KEY), devRecord.think(),
+                store.getString(PeonConstants.PREF_MODEL), devRecord.temperature(), devRecord.extraBody());
+    }
+
+    private static AiProvider providerOrNull(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        try {
+            return AiProvider.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            return null; // unknown stored value → the widget falls back to the first entry
+        }
     }
 
     @Override
     public boolean performOk() {
-        getPreferenceStore().setValue(PeonConstants.PREF_MODEL, StringUtil.stripToNull(modelWidget.getModel()));
-        return super.performOk();
-    }
-
-    private void buildCheckUrl() {
-        Button btnCheckUrl = new Button(getFieldEditorParent(), SWT.PUSH);
-        btnCheckUrl.setText("Check Host and Port...");
-        btnCheckUrl.setToolTipText("Tests TCP connectivity to the configured URL (3s timeout)");
-        GridData checkGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        checkGd.horizontalSpan = 2;
-        btnCheckUrl.setLayoutData(checkGd);
-        btnCheckUrl.addListener(SWT.Selection, e -> {
-            String urlValue = urlEditor.getStringValue();
-            boolean ok = LlmConfig.newConfig("", urlValue).isReachable(3000);
-            if (ok) {
-                MessageDialog.openInformation(getShell(), "Host Check", "Successfully connected to:\n" + urlValue);
-            } else {
-                MessageDialog.openError(getShell(), "Host Check", "Cannot reach:\n" + urlValue);
-            }
-        });
+        if (!super.performOk()) {
+            return false;
+        }
+        var values = modelConfigWidget.getValues();
+        var store = new EclipseLlmConfigStore(InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID));
+        // Single owner (R-DEF-9, ADR-0063): the basic page is the only editor of the base keys
+        // and the dev default slot — the widget writes the base keys, an empty url/key removes
+        // the key (empty = unset, never a null put: JFace's setValue(name, null) NPEs and leaves
+        // a partial save).
+        store.put(PeonConstants.PREF_PROVIDER_TYPE, values.provider().name());
+        EclipseLlmConfigStore.putOrRemove(store, PeonConstants.PREF_URL, values.url());
+        EclipseLlmConfigStore.putOrRemove(store, PeonConstants.PREF_API_KEY, values.apiKey());
+        // The dev record is the base model: the saver writes llm.model + llm.agent.dev.think/extraBody/
+        // temperature from the widget's values (hidden ≠ delete: a gated-off field returns its last
+        // visible value, R-DEF-11) and removes the legacy llm.agent.dev.url/apiKey overrides — dev is
+        // the default slot, it has no override keys (ADR-0062 clean break).
+        LlmConfigSaver.saveAgentModelConfig(store, AgentModelConfig.DEV,
+                LlmPreferenceInitializer.buildWithDefaults().modelConfigFor(AgentModelConfig.DEV).withModel(values.model())
+                        .withThink(values.think()).withExtraBody(values.extraBody()).withTemperature(values.temperature()));
+        return true;
     }
 
     private void buildGithubLogin() {
@@ -140,10 +137,9 @@ public class AiConfigPreferenceView extends FieldEditorPreferencePage implements
         btnLogin.setLayoutData(btnGd);
         btnLogin.addListener(SWT.Selection, e -> {
             new CopilotDeviceFlowDialog(getShell()).open();
-            // Reload field editors so the page shows the saved token + provider,
+            // Reload the widget so the page shows the saved token + provider,
             // preventing stale values from overwriting on OK/Apply.
-            providerEditor.load();
-            apiKeyEditor.load();
+            modelConfigWidget.load(storeValues());
         });
     }
 

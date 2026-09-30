@@ -33,6 +33,7 @@ class LlmConfigLoaderTest {
         assertThat(config.modelConfigFor(AgentModelConfig.PLAN).temperature()).isEqualTo("0.4");
     }
 
+    // UC-THINK-9
     @Test
     void loaderRebuildsBaseConfig() {
         var store = new MapLlmConfigStore();
@@ -43,7 +44,6 @@ class LlmConfigLoaderTest {
         store.put(LlmConfigKeys.TIMEOUT, "120");
         store.put(LlmConfigKeys.MAX_TOKENS, "4096");
         store.put(LlmConfigKeys.TOKEN_WINDOW, "100000");
-        store.put(LlmConfigKeys.THINK_SUPPORTED, "true");
         store.put(LlmConfigKeys.SEND_THINKING_ENABLED, "false");
         store.put(LlmConfigKeys.QUERY_PARAMS, "a=1,b=2");
         store.put(LlmConfigKeys.SHELL_CONFIRMATION_ENABLED, "always");
@@ -57,7 +57,6 @@ class LlmConfigLoaderTest {
         assertThat(config.getTimeout()).isEqualTo(Duration.ofSeconds(120));
         assertThat(config.getMaxTokens()).isEqualTo(4096);
         assertThat(config.getAutoCompactAfter()).isEqualTo(100_000);
-        assertThat(config.isThinkSupported()).isTrue();
         assertThat(config.shouldWeSendThinkingBackToLLM()).isFalse();
         assertThat(config.getQueryParams()).containsEntry("a", "1").containsEntry("b", "2");
     }
@@ -87,6 +86,23 @@ class LlmConfigLoaderTest {
         var config = LlmConfigLoader.load(store);
 
         assertThat(config.modelConfigFor(AgentModelConfig.DEV).model()).isEqualTo("gpt-4o");
+    }
+
+    @Test
+    void devUrlAndApiKeyKeysAreIgnored() {
+        // GIVEN a store with legacy dev override keys and a base model
+        var store = new MapLlmConfigStore();
+        store.put(LlmConfigKeys.MODEL, "base-model");
+        store.put(LlmConfigKeys.agentKey(AgentModelConfig.DEV, LlmConfigKeys.AGENT_FIELD_URL), "http://dev-override:11434");
+        store.put(LlmConfigKeys.agentKey(AgentModelConfig.DEV, LlmConfigKeys.AGENT_FIELD_API_KEY), "dev-override-key");
+
+        // WHEN the config is loaded
+        var dev = LlmConfigLoader.load(store).modelConfigFor(AgentModelConfig.DEV);
+
+        // THEN the dev record carries no url/key (dev is the base slot, ADR-0062) and the base model
+        assertThat(dev.url()).isNull();
+        assertThat(dev.apiKey()).isNull();
+        assertThat(dev.model()).isEqualTo("base-model");
     }
 
     @Test
@@ -138,6 +154,7 @@ class LlmConfigLoaderTest {
         assertThat(config.modelConfigFor(AgentModelConfig.PLAN).model()).isEqualTo("gpt-5");
     }
 
+    // UC-THINK-9
     @Test
     void loaderFallsBackToDefaultsOnMissingKeys() {
         var config = LlmConfigLoader.load(new MapLlmConfigStore());
@@ -146,7 +163,6 @@ class LlmConfigLoaderTest {
         assertThat(config.getTimeout()).isEqualTo(Duration.ofMinutes(3));
         assertThat(config.getMaxTokens()).isZero();
         assertThat(config.getAutoCompactAfter()).isEqualTo(80_000);
-        assertThat(config.isThinkSupported()).isFalse();
         assertThat(config.shouldWeSendThinkingBackToLLM()).isTrue();
     }
 

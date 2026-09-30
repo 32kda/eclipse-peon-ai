@@ -1,41 +1,41 @@
-# Session-Stand — 2026-09-27 (R-CC-15 Nested-Usage-Leak; Smoke-Test Compact-Hint)
+# Session-Stand — 2026-09-30 (Cleanup + Push, Paul-Smoke ✅)
 
 > Achtung: docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts
 > im Chat, Jon schreibt. (Da Mek hatte 2026-09-27 memory.md überschrieben — nicht wiederholen.)
 
-## Branch
-- **`story/compact-input-budget`** — Paul: **kein Merge**, weiter arbeiten. Branch ahead 3:
-  `aaea9e5` (TODO-REMOVE-Diagnostik), `0b38d17`, `8cfa46a` (docs). Merge → main = Paul.
+## AKTUELL 2026-09-30: Post-Smoke-Cleanup (Paul-Order)
 
-## Smoke-Test Compact-Hint (2026-09-27, alle 4 grün, Paul-Order)
-- Mek/Thinka/Dok: Compact-Tool vorhanden, Hint → sofort kompaktiert, Codes überlebt.
-- **Da Sniffa** (kein Compact-Tool): echter `CONTEXT LIMIT WARNING` (19150/20000) während der
-  Lektüre, kompaktierte selbst, antwortete korrekt mit Code SUCH-1106.
-- **Befund → R-CC-15 🚧** (docs/compact.md): nach `Da Sniffa done` PO-Hint
-  `memory=31002(estimate=false) model=31002 estimate=1902` — Sub-Agent-Usage sprang ins
-  Parent-Memory. Da Dok verifiziert code-seitig, Da Mek baut roten Test (Estimates im Test).
-- Smoke-Befunde 2026-09-26: Compact lief sauber (Skip = LLM-Doppel-Aufruf, Guard size<3 by design);
-  memory==model → kein Wildwuchs; Fixed-Overhead ≈ 7,3k → 10k-Limit praktisch sinnlos (30–40k testen).
+Paul: „smoke war erfolgreich — docs saubermachen und alles pushen — alte pläne löschen — release
+notes in english schreiben."
 
-## In Arbeit
-1. **R-CC-15 ✅** (`4cb2783` + **Paul-Hotfix**: `agent == null || !hasCompactTool` → Fallback-Hint,
-   ToolService:216 — „Compact geht nur mit Agent"). Surefire 1026/0/0/0; lint 0. Paul smoke-testet.
-2. **Neue Befunde (Jon):** ~~Bug A~~ **gelöst** (Paul-Guard + Mek-Inversions-Fix `8fb7baf`,
-   resolved-points) · **Bug B ⏳** CompactSessionTool kompaktiert agent.getMemory() statt
-   req.getMemory() (latent, echten Suchagenten) · **Kleinigkeit** compactSession trotz agent==null
-   exponiert · StreamingBridge-Race (ADR-0058-Nebenbefund).
-   **Aufräum-Inkrement `8fb7baf`:** Test-Dedup 1026→1022 (Doppeltester gestrichen, Begründungen im
-   Commit), Spam-Guard-Test, Surefire 1022/0/0/0, Lint 0. TODO-REMOVE-Logs bleiben drin (nimmt Paul).
-3. **R-CC-16 ❌** — Da Scribe schreibt Compressor-LLM-Context-Größe (ohne Static) ins onTool,
-   Estimate daneben — wartet auf Umsetzung.
-4. **❓ Header 0k estimate (Jon)** — IST: Roster-Refresh nur event-getrieben (onTokenUsage);
-   SOLL-Frage an Paul: Estimate-Pfad in den Refresh — open-points.md.
-5. **TODO-REMOVE-Diagnostik** (`aaea9e5`) — nach Pauls Re-Smoke entfernen (grep `TODO-REMOVE`).
+1. **Paul-Smoke ✅ 2026-09-30** für alle 5 Zyklen (R-DEF-9…11, R-THINK-11/12, Default-Inheritance,
+   Model Config Widget, Issue #149) — in Docs markiert: index.md (4 Stellen), per-agent-think.md
+   (R-THINK-4/5), model-config-widget.md, compact.md (R-CC-15), user-context.md,
+   open-points.md (Issue-#149-Punkt 🔒).
+2. **8 Plan-Archive gelöscht** (peon-plan/overview-done-2026-09-26…09-30) — peon-plan/ leer.
+3. **CHANGELOG.md (Englisch) im Repo-Root angelegt** — Paul-Entscheidung: Repo-Root, nächste
+   Version **2.12.4** (Letzter Tag: 2.12.3, 43 Commits seitdem: Think 14, Model-Config/Inheritance
+   21, Housekeeping 8). Keep-a-Changelog-Stil; ältere Releases → GitHub Releases verlinkt.
+4. **Push:** story/issue-149-think (war nur inc-6 `d77ea570` ahead auf origin) — Mek committet
+   CHANGELOG.md + docs/** + peon-plan-Löschungen, dann `git push`. **Merge nach main = Paul**
+   (nicht angeordnet, nicht machen). `release-2026-09-06` existiert nicht mehr (lokal+remote weg).
+   `homepage/.vitepress/dist` ist NICHT tracked — kein stale-Dist-Problem. Keine Stashes.
 
-## Offen (Paul)
-1. **❓ Fixture-Drift**: pom.xml/Dockerfile im test_project zulässig oder aufräumen + README-Zeile —
-   open-points.md (Da-Mek-Empfehlung: behalten + Doc anpassen).
-2. **⏳ Option A** — Standalone-Peon-Review behält memory*/askUser.
-3. **⏳ Doc-Split CIB** — compact-input-budget.md ausgegliedert statt Umnummerierung.
-4. **⏳ Docs-SOLL-Hygiene-Sweep** — Scope bestätigen.
-5. **Merge → main** — zurückgestellt. 6. **R-CC-7** 🚧 Retry/Fehlerklassen-Backlog.
+## Nächste Schritte
+
+1. **Mek:** Commit (CHANGELOG.md, docs/**, peon-plan-Del) + Push → dann dieser Stand ok.
+2. **Merge nach main** = Pauls Entscheidung (Ansage offen).
+3. **Danach (Paul-Order): Context-Overflow/ContentProvider-Bug-Zyklus** — Thinka 954k nach
+   clearPlan (per-Request-Injektion, nicht Agent-Memory), Mek 431005 vs. n_ctx 170240, webFetch
+   „Reading https://…" = 500k. Evidenz: open-points.md ❓ auto-compact-Eintrag. Logs nur mit
+   searchAgent lesen (runtime-EclipseApplication/.metadata/.log, GROSS).
+4. Backlog: AGENTS-Trim (wartet Paul-GO, inkl. toter „komponenten-architektur"-Skill-Link in
+   AGENTS.md:43) · Scaffold-als-Jon-Delegat (SOLL-Gespräch offen) · TrimService-Story (⏳) ·
+   R-CC-7 · Think-BDD-Lücken (a)–(g) · per-Agent-Provider-Override (❓) · Linter ☠️-Status (❓) ·
+   ApiRetry (memory 21, 5× Evidence, +503 „Loading model") · Homepage advanced-configuration.md:53
+   high/medium/low/minimal vs. Dropdown none…xhigh (präexistente Unschärfe).
+
+## Gelöste Alt-Punkte (dieser Zyklus)
+
+- Paul-Smoke 5 Zyklen ✅ (2026-09-30) — Push/Merge-Pflicht ging an Paul zurück, er will pushen.
+- R-CC-15 Nested-Agent-Parent-Memory ✅ gesmoked.

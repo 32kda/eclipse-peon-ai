@@ -103,6 +103,7 @@ class LlmConfigSaverTest {
                 .doesNotContainKey(LlmConfigKeys.MODEL);
     }
 
+    // UC-THINK-2
     @Test
     void roundtripStable() {
         // GIVEN a fully-set plan record
@@ -117,10 +118,12 @@ class LlmConfigSaverTest {
         assertThat(reloaded).isEqualTo(record);
     }
 
+    // UC-THINK-2
     @Test
     void roundtripDevStable() {
-        // GIVEN a fully-set dev record (model lands on the base key)
-        var record = new AgentModelConfig("http://dev:1234/v1", "dev-key", "gpt-4o", "medium", null, null);
+        // GIVEN a fully-set dev record (model lands on the base key; url/key are never read
+        // for dev — ADR-0062 clean break — so they are unset in the record)
+        var record = new AgentModelConfig(null, null, "gpt-4o", "medium", "{\"a\":1}", "0.3");
 
         // WHEN saved and reloaded
         var store = new MapLlmConfigStore();

@@ -22,16 +22,15 @@ Different agents can use different models to optimize for cost, speed, or capabi
 
 ### How It Works
 
-1. The **Dev agent always uses the base model** you configure — this is your primary coding model
-2. Leave URL or API key empty to inherit it from the base configuration. The Advanced URL field shows only the agent's **own** override — empty means inherit. The URL on the main Peon configuration page is the base for **every** agent without its own override; the Dev agent has no URL of its own by default and inherits the one configured there. For the model, an empty **PO** or **Dev** field falls back to the base model; **Plan**, **Search**, and **Compact** use the provider's default model.
-3. Pick a model from the **dropdown** (or type one) to override only that agent's model
-4. The dropdown is filled from your provider's model list, **fetched once per connection** (the agent's effective URL/key). Click **Refresh** to reload the list — Refresh always uses the **saved** connection settings, so after changing URL/key click **Apply** first, then Refresh. A failed refresh keeps the previous one. A model you have already configured stays in the field even if it is missing from the fetched list — typed models are never added to the dropdown.
+1. The **Dev agent** is the default and has **no section on this page**: its complete settings — **Provider Type**, **URL**, **API Key**, **Model**, **Think (Default)**, **Temperature** and **Extra body (JSON)** — live in the **Default for all agents** group on the main [Peon Configuration](./configuration.md) page, which is the only editor of those settings. The Dev model is your primary coding model (the base model).
+2. Every slot on this page — **PO**, **Plan**, **Search** and **Compact** — leaves its **Model** field empty to inherit the base model; pick a model from the **dropdown** (or type one) to override only that agent. Leave the slot's **URL** or **API Key** field empty to inherit it from the base configuration — those fields show only the agent's **own** override.
+3. The dropdown is filled from your provider's model list, **fetched once per connection** (the agent's effective URL/key). Click **Refresh** to reload the list — Refresh uses the values **currently typed** in the page's fields, no Apply needed (Apply/OK is what saves them). A failed refresh keeps the previous one. A model you have already configured stays in the field even if it is missing from the fetched list — typed models are never added to the dropdown.
 
 Existing installations start with an empty PO slot, which inherits the base configuration. If Jon was previously controlled through the Plan slot, configure the PO slot once after upgrading.
 
 ## Temperature Settings
 
-Every built-in agent — **PO (Jon)**, **Dev**, **Plan**, **Search**, and **Compact** — has its own Temperature field. There is no shared default and no value is inherited between agents.
+Every built-in agent — **PO (Jon)**, **Dev**, **Plan**, **Search** and **Compact** — has its own Temperature field. There is no shared default and no value is inherited between agents. The Dev agent's field lives on the main [Peon Configuration](./configuration.md#temperature) page (**Temperature** in the **Default for all agents** group) — this page has no Dev section.
 
 - **Empty** means unset: Peon omits `temperature` and lets the provider or model choose its default. This is important for GPT-5 and o-series models, which reject non-default temperature values.
 - Search and Compact now send nothing unless their own value is set (previously they implicitly sent `0.3` and `0.2`). To keep the old values, enter them once in the corresponding fields.
@@ -43,7 +42,9 @@ Every built-in agent — **PO (Jon)**, **Dev**, **Plan**, **Search**, and **Comp
 
 Thinking/reasoning is sent **per request**, so each agent resolves its own value for its provider and model. This solves mixed setups — for example planning with **GPT** (`reasoning.effort=high`) while implementing with **DeepSeek** through an OpenAI-compatible gateway that rejects `reasoning.effort`.
 
-Every built-in agent — **PO (Jon)**, **Dev** (the default), **Plan**, **Search** and **Compact** — has its own **Think** field on this page, and every [custom agent](./custom-agents.md) sets the same via its `AGENT.md` frontmatter triple. **Nothing is inherited between agents.**
+Every override agent on this page — **PO (Jon)**, **Plan**, **Search** and **Compact** — has its own **Think** field, and every [custom agent](./custom-agents.md) sets the same via the `think` field in its `AGENT.md` frontmatter. The **Dev agent** is the default: its Think value is the **Think (Default)** field on the main [Peon Configuration](./configuration.md#thinking-support) page.
+
+The only inheritance is the **default**: an agent with an **empty** Think field inherits the **Think (Default)** value from the main [Peon Configuration](./configuration.md#thinking-support) page. An agent's own value always wins — an explicit off included. Empty agent **and** empty default → unset, nothing is sent.
 
 The Think field takes a single value whose form depends on the base provider:
 
@@ -51,28 +52,27 @@ The Think field takes a single value whose form depends on the base provider:
 |----------|-------------|--------|
 | **OpenAI family** | dropdown | `high` / `medium` / `low` / `minimal` (`reasoning.effort`) |
 | **Claude (Anthropic)** | dropdown | `enabled` / `adaptive` (extended thinking) |
-| **Ollama** | checkbox | on (`true`) / off |
+| **Ollama** | editable dropdown | empty / `true` / `false` — the `think` flag |
 | **LM Studio** | free text | any value — sent as the custom `reasoning` body property |
 
-- **Off / empty** — nothing is sent (provider default), except Ollama sends `think:false`.
-- **Generic on** (`true`) — the [built-in model mapping](#built-in-model-mapping) picks the concrete value for your provider/model.
+- **Empty** — unset: nothing is sent and the model decides (for Ollama the `think` field is omitted entirely).
+- **Off token** (`false` / `off` / `no` / `nein` / `none`, case-insensitive) — interpreted **only by Ollama** (sends `think:false`). On the string providers (OpenAI family, LM Studio) it is just a value and is sent verbatim (`reasoning.effort=false`, `reasoning=off`). On Anthropic it means off — nothing is sent.
+- **Generic on** (`true`) — Anthropic: the [built-in model mapping](#built-in-model-mapping) picks the concrete value for your model. OpenAI family and LM Studio: sent verbatim as `true`.
 - **Concrete value** — used verbatim.
 
-### Auto vs. manual
-
-- **Auto** — the field is set to the generic on (`true`) → Peon uses the built-in mapping for your provider/model.
-- **Manual** — set a concrete value (e.g. `high`, `enabled`) → the mapping is switched off and your value is used verbatim.
+::: warning The Ollama checkbox is gone
+The old on/off checkbox is replaced by the dropdown, and a previously **off** checkbox now reads as **empty = unset** — the model thinks by default again. To explicitly turn thinking off, select `false`.
+:::
 
 ### Built-in model mapping
 
-When the Think field is set to the generic on (`true`), Peon maps to a provider- and model-specific value using built-in tables (one file per provider under the core plugin's `thinking/` resources):
+Only **Anthropic** still resolves the generic on (`true`) — using its built-in table (the `thinking/ANTHROPIC` resource under the core plugin):
 
-- **OpenAI family** — known reasoning models (`gpt*`, `o1`, `o3`, `o4`) → `reasoning.effort=high`; an **unknown model → nothing is sent**.
-- **Anthropic** — `opus-4-8` / `opus-4-7` / `mythos` → `adaptive`; other Claude models → `enabled`.
+- `opus-4-8` / `opus-4-7` / `mythos` → `adaptive`; other Claude models → `enabled`.
 
 **Provider support:**
 
-- **OpenAI family** (OpenAI, OpenAI-official / Azure, GitHub Models, GitHub Copilot) — `reasoning.effort`. Empty/off = nothing sent.
+- **OpenAI family** (OpenAI, OpenAI-official / Azure, GitHub Models, GitHub Copilot) — `reasoning.effort`; empty = nothing sent, any other value is sent verbatim (incl. `none` and `false`).
 - **Ollama** — the `think` flag: off sends `think:false`, on sends `think:true`, unset omits.
 - **Anthropic** — extended thinking (`enabled` / `adaptive`); off = nothing sent.
 - **LM Studio** — the custom `reasoning` body property.
@@ -80,11 +80,11 @@ When the Think field is set to the generic on (`true`), Peon maps to a provider-
 
 ### Send thinking back
 
-**Show and resend model thinking** (main Peon Configuration page) is a separate global transport switch. It is **independent** of model support.
+**Resend model thinking** (main Peon Configuration page) is a separate global transport switch. It is **independent** of the per-agent Think value.
 
 ## Extra Body / Prompt Caching
 
-Each agent's section has an **Extra body (JSON)** field: raw JSON merged into that agent's request body. This is also where **prompt caching** is configured — Peon no longer enables caching by itself, so **no cache is sent until you configure one** (a deliberate clean break, no silent default, no migration).
+Each agent's section has an **Extra body (JSON)** field: raw JSON merged into that agent's request body. The **Dev agent**'s extra body lives on the main [Peon Configuration](./configuration.md#extra-body-json) page (**Extra body (JSON)** in the **Default for all agents** group); there the field is hidden when the base provider does not support an extra body — **hidden ≠ deleted**: the stored JSON survives the switch and is never removed by it. This is also where **prompt caching** is configured — Peon no longer enables caching by itself, so **no cache is sent until you configure one** (a deliberate clean break, no silent default, no migration).
 
 ### Examples
 

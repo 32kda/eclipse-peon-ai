@@ -253,15 +253,21 @@ Same logic applies to commands directory (`~/.claude/commands` → `~/.llmpeon/c
 
 This one-time resolution ensures deterministic behavior without filesystem I/O on every config load.
 
-## Basis-URL vs. per-Agent Override — Klartext (2026-09-12, User-Rückfrage)
+## Basis-URL vs. per-Agent Override — Klartext (2026-09-12, User-Rückfrage; Update 2026-09-28)
 
 Die URL der **Basic-Page** (`llm.url`) ist die Basis für **alle** Agenten ohne eigenen Override —
 der Dev-Agent trägt standardmäßig **keinen eigenen** URL (`llm.agent.dev.url` existiert dann nicht)
 und erbt die Base-URL. Das URL-Feld der Advanced-View zeigt nur den **eigenen** Override
 („empty = inherit base"), nicht die effektive Verbindung — deshalb steht dort für Dev nichts,
 obwohl dev faktisch die Base-URL nutzt (`LlmConfig.java:165`, `EffectiveConnection.java:32`).
-Modell-Listen-Refresh nutzt den **gespeicherten** Stand: erst **Apply**, dann Refresh →
-R-ML2 in [model-loading.md](model-loading.md).
+
+**Update 2026-09-29 ([default-inheritance.md](default-inheritance.md) R-DEF-9/10, [ADR-0063](adr/0063-default-config-single-owner-basic-page.md)):**
+**Ein Owner:** die Basic-Seite („Default for all agents") ist die EINZIGE Stelle, die die Base-Keys
++ Dev-Slot schreibt (jetzt inkl. Extra body JSON); die Advanced-Seite hat **keine DEV-Sektion** und
+schreibt keine Base-Keys mehr. Der 2026-09-28 gebaute „Dev (Default)"-Abschnitt auf Advanced ist
+entfernt. Dev erbt zusätzlich das Base-Model (R-DEF-1-Fallback für alle NULL-Slots).
+Modell-Listen-Refresh liest **Live-Widget-Werte** (R-ML2, 2026-09-28 — siehe
+[model-loading.md](model-loading.md) / [model-config-widget.md](model-config-widget.md)).
 ## Config-Page UI — R-A1/R-A2/R-A3/R-A4 (2026-09-12, User-Smoke „Seite sieht altbacken aus")
 
 **R-A1 ✅ done (ui-config, `66ce4fe`) — Abstand unter den Examples:** GIVEN die Advanced-Page
@@ -308,3 +314,9 @@ editierbar statt READ_ONLY (Provider-Werte sind Vorschläge, kein geschlossenes 
   WHEN die Section lädt, THEN zeigt das Combo den Wert verbatim (Feld behält den Text)
 - GIVEN das Combo zeigt einen freien Text WHEN `getRecord()` THEN der Combo-Text wird
   unverändert als Think-Wert übernommen
+
+**R-A4-Follow-up (2026-09-27, Issue #149, [ADR-0059](adr/0059-think-dropdown-empty-unset.md) — ❌ in Arbeit):**
+„Boolean → weiter Checkbox" entfällt: `ThinkSupport.Boolean` (Ollama-Checkbox) wird ersatzlos
+gestrichen, Ollama bekommt ein editierbares Dropdown mit Items `""`/`true`/`false`; leer = unset =
+nichts senden. Basis-Checkbox „Default model supports thinking" (Basic-Seite) entfällt ebenfalls.
+Fachliche Regeln + BDD: [per-agent-think.md](per-agent-think.md) (UC-THINK-4/5).

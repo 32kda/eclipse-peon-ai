@@ -19,11 +19,12 @@ import org.sterl.llmpeon.parts.config.widgets.HorizontalRule;
 import org.sterl.llmpeon.parts.config.widgets.TitledGroup;
 
 /**
- * Advanced AI config page. The per-agent model config (url / key / model / think / temperature /
- * extra-body JSON) lives in five {@link AgentModelConfigSection} composites
- * (po/plan/dev/search/compact) — the base provider drives each section's think widget form and
- * extra-body visibility. The remaining base-level settings (timeout, max tokens, query/header
- * params, debug, realtime) stay as field editors.
+ * Advanced AI config page — per-agent overrides only (ADR-0063): the basic page is the single
+ * owner of the base keys and the dev default slot; this page never writes them (one key, one
+ * editor). Each override agent (po/plan/search/compact) gets one
+ * {@link AgentModelConfigSection} composite — the base provider drives each section's think
+ * widget form and extra-body visibility. The remaining base-level settings (timeout, max tokens,
+ * query/header params, debug, realtime) stay as field editors.
  */
 public class AiAdvancedPreferenceView extends FieldEditorPreferencePage implements IWorkbenchPreferencePage {
 
@@ -32,7 +33,6 @@ public class AiAdvancedPreferenceView extends FieldEditorPreferencePage implemen
     public static final List<AgentSection> AGENT_SECTIONS = List.of(
             new AgentSection(AgentModelConfig.PO, "PO agent (Jon)"),
             new AgentSection(AgentModelConfig.PLAN, "Plan agent"),
-            new AgentSection(AgentModelConfig.DEV, "Dev agent (uses base model)"),
             new AgentSection(AgentModelConfig.SEARCH, "Search agent"),
             new AgentSection(AgentModelConfig.COMPACT, "Compact agent"));
 
@@ -85,6 +85,8 @@ public class AiAdvancedPreferenceView extends FieldEditorPreferencePage implemen
     public boolean performOk() {
         if (!super.performOk()) return false;
         var store = new EclipseLlmConfigStore(InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID));
+        // Single owner (ADR-0063): only the per-agent slot keys — the base keys and the dev
+        // default slot are written by the basic page alone.
         for (var section : sections) {
             LlmConfigSaver.saveAgentModelConfig(store, section.getAgentId(), section.getRecord());
         }

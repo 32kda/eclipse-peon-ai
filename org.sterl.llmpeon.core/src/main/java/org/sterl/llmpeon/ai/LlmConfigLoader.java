@@ -15,8 +15,9 @@ import org.sterl.llmpeon.shared.StringUtil;
  * migration chain.
  *
  * <p>Missing base keys fall back to the {@link LlmConfig} defaults; missing per-agent fields fall
- * back to {@code null} (inherit base / provider default). Typed parsing (long/int/boolean and CSV
- * maps) happens here, keeping the {@link LlmConfigStore} contract string-only.</p>
+ * back to {@code null} (inherit base — the model directly, url/key via
+ * {@link EffectiveConnection}). Typed parsing (long/int/boolean and CSV maps) happens here, keeping
+ * the {@link LlmConfigStore} contract string-only.</p>
  */
 public final class LlmConfigLoader {
 
@@ -32,7 +33,6 @@ public final class LlmConfigLoader {
                 .timeout(Duration.ofSeconds(parseLong(store.get(LlmConfigKeys.TIMEOUT, null), 180)))
                 .maxTokens(parseInt(store.get(LlmConfigKeys.MAX_TOKENS, null), 0))
                 .autoCompactAfter(parseInt(store.get(LlmConfigKeys.TOKEN_WINDOW, null), 80_000))
-                .thinkSupported(parseBoolean(store.get(LlmConfigKeys.THINK_SUPPORTED, null), false))
                 .sendThinkingEnabled(parseBoolean(store.get(LlmConfigKeys.SEND_THINKING_ENABLED, null), true))
                 .configDir(Path.of(store.get(LlmConfigKeys.CONFIG_DIRECTORY, defaultConfigDir())))
                 .diskToolsEnabled(parseBoolean(store.get(LlmConfigKeys.DISK_TOOLS_ENABLED, null), false))
@@ -44,7 +44,13 @@ public final class LlmConfigLoader {
                 .build();
     }
 
-    /** The per-agent records: dev's model is the base {@code llm.model}; the others read their own model key. */
+    /**
+     * The per-agent records: dev's model is the base {@code llm.model} and the dev url/apiKey
+     * keys are never read (ADR-0062: dev is the base slot, not an override slot — a stored
+     * {@code llm.agent.dev.url/apiKey} would be an invisible override against the base
+     * connection UI; removed keys are ignored, never migrated); the other agents read their
+     * own keys.
+     */
     private static Map<String, AgentModelConfig> loadModelConfigs(LlmConfigStore store) {
         var baseModel = store.get(LlmConfigKeys.MODEL, null);
         var map = new LinkedHashMap<String, AgentModelConfig>();
@@ -57,9 +63,10 @@ public final class LlmConfigLoader {
     }
 
     private static AgentModelConfig agentRecord(LlmConfigStore store, String id, String model) {
+        boolean dev = AgentModelConfig.DEV.equals(id);
         return new AgentModelConfig(
-                StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_URL), null)),
-                StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_API_KEY), null)),
+                dev ? null : StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_URL), null)),
+                dev ? null : StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_API_KEY), null)),
                 model,
                 StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_THINK), null)),
                 StringUtil.stripToNull(store.get(LlmConfigKeys.agentKey(id, LlmConfigKeys.AGENT_FIELD_EXTRA_BODY), null)),
