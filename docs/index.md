@@ -87,7 +87,7 @@ Code. Vor dem Einführen eines neuen fachlichen Begriffs dort nachsehen und eint
 * [Open Points](open-points.md) - zurückgestellte/offene Punkte mit Status ❓ offen · ⏳ selbst entschieden · 🔒 geklärt.
 * [Resolved Points](resolved-points.md) - geklärte Punkte ohne eigenes Feature-Doc (Punkt · Entscheidung · Begründung · Datum). **Tool-Evolution-Run 2026-09-19:** CR-Verdicts nach PO-Run (abgelehnt/geparkt/angenommen + Decompiler-Begründung).
 * [Open to Discuss](open-to-discuss.md) - ambiguous items not clear as bugs or features yet; reviewed end-of-cycle.
-* [Issue #142 — ASM-Konflikt](issue-142-asm-conflict.md) - **🚧 Analyse (2026-09-19):** unser p2-Repo liefert asm 9.10.1 mit (includeAllDependencies, 2026-09-Target) — meine alte „nicht unser Bug"-Analyse unvollständig; Fix-Kandidaten + Follow-ups offen.
+* [Issue #142 — ASM-Konflikt](issue-142-asm-conflict.md) - **✅ gefixt (2026-10-06):** unser p2-Repo lieferte via `includeAllDependencies` Platform-Bundles (asm 9.10.1) mit und brickte Eclipse 2026-03; Flag entfernt, `jakarta.annotation` auf `[2.0.0,4.0.0)`, Target/Compatibility-Floor auf 2025-12. Repo liefert nur noch Feature+Plugin.
 * [Open Ends / Memory](memory.md) - **Session-Zwischenstand only** (Ergebnis, offene User-Handlungen, Startpunkte der nächsten Session); nach jedem Plan-Zyklus aufräumen. Dauerhafte Lernings gehören nach `AGENTS.md` / `AGENTS-DEV.md` / `skills/` bzw. in die memory*-Tools, projektspezifische Fakten in die Feature-Docs und ADRs.
 * [ADRs](adr/index.md) - technical decision records (the agent's long-term memory).
 

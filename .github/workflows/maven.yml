@@ -11,6 +11,8 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'skills/**'
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,3 +27,24 @@ jobs:
         cache: maven
     - name: Build with Maven
       run: xvfb-run -a mvn -B clean verify --file pom.xml
+
+    # Issue #142 regression guard: our p2 update site must only contain our own
+    # feature + plugin. Platform bundles (org.objectweb.asm 9.10.1, spifly, jsvg, ...)
+    # leaked in via includeAllDependencies=true and bricked Eclipse 2026-03.
+    - name: Assert update site does not ship platform bundles (issue #142)
+      run: |
+        set -euo pipefail
+        repo=releng/llmpeon-update-site/target/repository
+        echo "Plugins published by the update site:"
+        ls -1 "$repo/plugins"
+        if ls -1 "$repo/plugins" | grep -Eiq 'objectweb|spifly|jsvg|bytebuddy'; then
+          echo "::error::Update site ships platform bundles (org.objectweb.asm) - issue #142 regression"
+          exit 1
+        fi
+
+    - name: Upload p2 update site
+      uses: actions/upload-artifact@v4
+      with:
+        name: peon-ai-update-site
+        path: releng/llmpeon-update-site/target/repository
+        if-no-files-found: error
