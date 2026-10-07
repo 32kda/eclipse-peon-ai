@@ -2,6 +2,7 @@
 
 > **Status:** ✅ Fix umgesetzt (2026-10-06). Extern:
 > github.com/sterlp/eclipse-peon-ai/issues/142.
+> 🇬🇧 English: [issue-142-asm-conflict-en.md](issue-142-asm-conflict-en.md).
 
 ## Ursache (verifiziert 2026-10-06, p2-Metadaten)
 
