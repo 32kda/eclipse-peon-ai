@@ -37,7 +37,31 @@ Target-Platform in unser Repo — inkl. `org.objectweb.asm` 9.10.1 + commons/tre
   `split("\n")` auf CRLF-Output). Core 1051 mit denselben 8 F/6 E wie auf unverändertem HEAD
   (Windows-Pfad/Timing) — nicht durch diesen Fix verursacht.
 
+## Zweite Manifestation: `jakarta.annotation-api 3.0.0` → AI-Peon-View leer (2026-10-07)
+
+Derselbe `includeAllDependencies`-Leak lieferte neben asm 9.10.1 auch
+`jakarta.annotation-api 3.0.0` mit. Nach dem asm-Cleanup blieb es als **Orphan** in der
+Installation (Datei + `bundles.info` + `artifacts.xml`, nicht mehr im p2-Profil). Folge:
+Eclipse startet, aber die View bleibt leer, ohne Log-Eintrag.
+
+- `org.eclipse.e4.core.di` importiert `jakarta.annotation [2,3)` → bindet **2.1.1**.
+- `org.sterl.llmpeon` importiert `[2.0.0,4.0.0)` → bindet das **höhere 3.0.0**.
+- e4 matcht `@PostConstruct` über **Annotation-`Class`-Identität**
+  (`AnnotationProxy.isPresent` → `isAnnotationPresent(Class)`) → zwei verschiedene
+  `PostConstruct`-Klassen → `AIChatView.createPartControl` wird nie aufgerufen (Konstruktor
+  läuft, Lifecycle nicht — per Debugger-Stack `ReflectionContributionFactory → make` bestätigt).
+
+Beseitigung + Anleitung für betroffene Nutzer:
+[troubleshooting-stale-platform-bundles.md](troubleshooting-stale-platform-bundles.md) +
+Skript `docs/clear-stale-platform-bundles.ps1`.
+
+> Hinweis: Der breite Bereich `[2.0.0,4.0.0)` ist nötig (2026-03 nur 2.1.1, 2026-09 nur 3.0.0);
+> die Divergenz tritt nur bei **zwei** Providern (Leftover) auf. Absicherung daher über die
+> Update-Site/CI, nicht über einen Versionsbereich.
+
 ## Follow-ups
 
 - [ ] Öffentlicher Korrektur-Kommentar auf Issue #142 (kann ich nicht posten).
 - [x] Homepage-Mindestversion = 2025-12 (bereits korrekt).
+- [x] Nutzer-Anleitung + Skript für Stale-Platform-Bundles (`docs/troubleshooting-stale-platform-bundles.md`).
+- [x] CI-Assert: Update-Site liefert nur `org.sterl.*`-Plugins.
