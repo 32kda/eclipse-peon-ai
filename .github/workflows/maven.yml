@@ -25,6 +25,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: maven
+    # NOTE: -Dmaven.resolver.validation=MILD lives in .mvn/maven.config.
+    # Tycho injects Bundle-ClassPath entries (lib/*.jar) as Maven classifiers for
+    # system-scoped deps; Maven 3.10+ (Resolver 2.x) rejects classifiers containing
+    # '/', failing with "Invalid Collect Request" (eclipse-tycho/tycho#6399).
     - name: Build with Maven
       run: xvfb-run -a mvn -B clean verify --file pom.xml
 
