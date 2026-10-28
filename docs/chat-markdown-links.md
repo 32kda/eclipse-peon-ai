@@ -37,6 +37,26 @@ Das erste Treffer-File wird geöffnet.
 - **GIVEN** `[LangChain4j](https://docs.langchain4j.dev/)` **WHEN** der User darauf klickt
   **THEN** der Browser öffnet die URL → `externalUrlOpensBrowser`
 
+### R5 — Fenced Workspace-Pfad wird klickbar ✅ (2026-10-15)
+Ein Fenced Code Block, der **genau einen** Workspace-Pfad mit Datei-Endung enthält, wird als
+`open-in-editor:`-Link gerendert (z. B. `src/main/java/Foo.java`). URLs, mehrzeiliger Inhalt und
+echter Code bleiben Code — nur ein nackter Einzelpfad matcht.
+
+- **GIVEN** ein Fenced Block mit `src/main/java/Foo.java` **WHEN** der User darauf klickt
+  **THEN** öffnet sich die Datei im Eclipse Editor (gleicher Pfad wie R1–R3)
+- **GIVEN** ein Fenced Block mit `https://example.com/docs` **WHEN** er gerendert wird
+  **THEN** bleibt er Code (kein Editor-Link)
+
+### R6 — Langer Tool-Output wird nie still gekürzt ✅ (2026-10-15)
+Aufeinanderfolgende `TOOL`-Messages werden gruppiert. Ab mehr als 10 Zeilen zeigt der Chat die
+letzten 10 und einen Toggle mit der **exakten Zahl der verborgenen Zeilen**
+(`⋯ N earlier lines — show all`). Ein Klick zeigt alles (`show less` schaltet zurück). Die volle
+Zeilenliste bleibt im DOM erhalten — nichts wird verworfen.
+
+- **GIVEN** 40 Tool-Zeilen **WHEN** die letzte eintrifft **THEN** sind 10 sichtbar und der Toggle
+  nennt `30 earlier lines`
+- **GIVEN** derselbe Block **WHEN** der Toggle geklickt wird **THEN** sind alle 40 Zeilen sichtbar
+
 ## Technical Approach
 
 ### JavaScript — markdown-it Link-Renderer
@@ -51,6 +71,11 @@ md.renderer.rules.link_open = function (tokens, idx) {
     return defaultLinkOpen(tokens, idx, options);
 };
 ```
+
+Fenced Pfade laufen über den `highlight`-Callback: ist der getrimmte Block ein einzelner Pfad
+(`isWorkspacePath`), wird er als `<a href="open-in-editor:…">` gerendert; sonst normales Code-Block
+mit Copy-Button. Alle Editor-Links nutzen denselben `open-in-editor:`-Protokollpfad im
+`LocationListener` von `ChatMarkdownWidget` — keine zweite Auflösungslogik.
 
 `isWorkspaceLink(href)`: True wenn href mit `/` beginnt, `.md`/`.java`/`.xml` etc. enthält,
 oder ein relativer Pfad ist (enthält `/` aber kein `://`).

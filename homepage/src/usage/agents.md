@@ -5,6 +5,23 @@ description: The Jon team in the header — status, per-slave compact buttons, a
 
 # Agent Team
 
+## Sessions and tabs
+
+The AI Peon view is one workspace with **one tab per chat session**:
+
+- **+** creates a new session; **History** reopens any saved session.
+- Each tab owns its own transcript, agent team, model choice, skills and MCP usage. Sub-agent
+  messages (`startAgent`, Jon's workers) stay in the same tab transcript.
+- Tabs show a working marker while an agent is busy and a **?** marker when an agent is waiting
+  for an answer. Only the active tab receives editor selections; other tabs keep their context.
+- Session titles are derived from the first user message. Closed tabs and restarts do not lose
+  history; sessions are stored as append-only event logs in the workspace metadata.
+- **Pin skill** in the input area pins skills for the current session. Pinned skill bodies are
+  re-injected into the turn context (once per context, again after compact) and are unpinned with
+  the chip's `x` button.
+- Programmatic loop-breaker messages are stored as user messages for the model but render as a
+  separate **Reminder** note in the chat.
+
 When **Jon** (Peon-PO) is the active agent, the header shows his team with each member's name and current context size:
 
 ```
@@ -59,6 +76,36 @@ Unlike Compact, **Clear** in Jon mode does cascade: it resets **Jon and all thre
 ::: tip
 Use **Clear** to start a fresh session; use the **per-worker compact buttons** to free up one worker's context while the team keeps working.
 :::
+
+## Model and skill selectors (below the chat input)
+
+Directly below the chat input:
+
+- **Model** combo — selects the model for the active agent. The list comes from the agent's
+  effective connection and is cached per connection. Built-in agents persist the choice in their
+  slot (Dev/base, Plan, PO); a custom agent writes `model:` back to its `AGENT.md`.
+  When no model is active, the combo shows **`[none - configure before use]`** and the send button
+  is disabled.
+- **Skills** button — opens the skill menu (All Skills / config skills / project skills) and applies
+  a change immediately. The short skill catalog in the agent prompt is re-baked after every toggle.
+
+The action bar (agent selector, compact, clear) follows below; the status bar keeps only project
+pin, selected file and the MCP toggle.
+
+## Specialist sub-agents (Java / PDE)
+
+Two focused agents are contributed out of the box:
+
+| Agent | Focus | Typical use |
+|-------|-------|-------------|
+| **Java Developer** | JDT: read/navigate/edit Java, run tests, build, debug | "Fix this Java bug and run the tests" |
+| **PDE Developer** | MANIFEST/plugin.xml, target platform, OSGi build/test | "Update the plugin dependencies and build it" |
+
+Select one in the agent combo to chat with it directly, or let the active agent delegate:
+the **agent catalog** in its prompt lists the specialists, and the `startAgent` tool starts exactly
+one of them with its own curated tool set. A sub-agent cannot start another sub-agent, so the
+delegation graph stays a tree — and the main agent does not need every Java/PDE tool in its own
+tool list.
 
 ## Verification
 

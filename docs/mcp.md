@@ -69,3 +69,54 @@ ohne `READ_ONLY`):
   andere Werte lösen die Versionserkennung aus (kann bei Dual-Era-Servern -32022 liefern)."
 - Server-Tabelle der Übersicht zeigt `Auto` für leere protocolVersion.
 - Verifikation manuell (kein SWT-Test-Harness; Präzedenz R-UI1, user-question-tool-design.md).
+
+## R-MCP4 — In-process Java/Eclipse MCP server extension ✅ (2026-10-15)
+
+External transports stay preference-driven (STDIO via `command`/`args`/`envVars`, Streamable HTTP via
+`url`/`apiKey` — see `McpService`). Eclipse plugins can additionally contribute an **in-process**
+server — no subprocess, no socket, full workspace access:
+
+```xml
+<extension point="org.sterl.llmpeon.mcpServer">
+  <mcpServer class="com.example.MyMcpServer"/>
+</extension>
+```
+
+```java
+public class MyMcpServer implements IMcpServer {
+    public String name() { return "my-tools"; }
+    public boolean defaultEnabled() { return false; }          // opt-in
+    public List<IMcpTool> tools() { return List.of(new MyTool()); }
+}
+
+// Extend AbstractTool for the monitor/request plumbing; implement IMcpTool for MCP provenance.
+public class MyTool extends AbstractTool implements IMcpTool {
+    @Tool(name = "myThing", value = "What the tool does.")
+    public String thing(@P(name = "x") String x) { return "..."; }
+}
+```
+
+Rules:
+- **Tool markup reuses the repo mechanism:** langchain4j `@Tool`/`@P`. No second annotation set is
+  needed — schema generation, parameter names/descriptions and the loop integration stay identical.
+- **`defaultEnabled` is false by default** (server and `tool` extension point): contributed tools are
+  not in the default agent tool list. An agent opts in by naming the tool in its `tools:` allowlist.
+  Set it true only for broadly useful, cheap tools.
+- In-process MCP tools are marked **`(MCP)`** in the header tool popup; name collisions with
+  built-ins are rejected; a broken contribution is logged and skipped.
+- The server and its tools may implement `org.sterl.llmpeon.parts.ProjectAware` to receive the active
+  project.
+- External MCP servers are already explicit at the server level (configured + MCP toggle), so they
+  are not affected by the extension flag.
+
+Tests: `ToolContributedTest` covers `defaultEnabled`, the MCP flag and allowlist opt-in. The
+registry itself is a thin extension reader (`McpServerProviderRegistry`).
+
+## R-MCP5 - Workspace connection pool (2026-10-27)
+
+`McpConnectionManager` is one workspace-scoped pool shared by all session tabs. A session panel
+holds a lease (`McpToolGateway`); the underlying `McpService` clients are shared. The last release
+starts a 10-minute idle timer before the connections/stdio processes are closed. Agents can restrict
+the visible servers with `mcp-servers:` (`null` = all workspace-enabled, empty = none). MCP tool
+names remain subject to the agent's `tools:` allowlist. Config changes reconcile once; unchanged
+configs do not reconnect.

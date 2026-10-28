@@ -83,3 +83,33 @@ This is useful when you want to keep working on one project while browsing files
 ## Drag-and-Drop Files
 
 You can also drag and drop files from Eclipse Explorer or your file system directly into the chat input to include additional context as `@path` references.
+
+## Add files with `@`
+
+Type `@` in the chat input to pick a workspace file:
+
+- Type to filter (case-insensitive) — `@Foo`, `@src/main`, `@controller`
+- The active project's files are listed first, then the rest of the workspace
+- Use **↑/↓** to navigate, **Enter** or **Tab** to insert, **Esc** to dismiss
+- The selected path is inserted as `@/project/path/File.java` — the same reference drag-and-drop creates
+
+The file list is indexed in the background and refreshed periodically; derived and team-private
+resources are excluded. This is a workspace index, not a full disk scan.
+
+## Add Java types with `#`
+
+Type `#` in the chat input to open the native JDT type dialog. Pick a type and its fully qualified
+name is inserted as `#org.example.Foo`.
+
+## What gets attached
+
+Typed or dropped `@path` / `#Type` references are read into the chat context automatically when you
+send the message. Attachments are capped and the cap is always disclosed:
+
+- at most **200 lines** per reference — the block says `showing N of M lines` and the footer names
+  the lines that were not sent
+- at most **5 references** and **64 000 characters** per turn
+- unresolved references are listed in a `Mention limits` note with the reason (`not found`, limit,
+  or context budget)
+
+Nothing is silently dropped: if a cap applies, the chat says so.

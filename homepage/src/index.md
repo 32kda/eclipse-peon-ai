@@ -11,7 +11,7 @@ Eclipse Peon AI is an Eclipse RCP plugin that integrates a lightweight, context-
 
 ## Features
 
-- **Chat Interface**: Interactive AI chat with syntax-highlighted code blocks and markdown rendering
+- **Chat Interface**: Interactive AI chat with syntax-highlighted code blocks, markdown rendering, a copy button on every code block, clickable workspace paths, and collapsible tool output
 - **Voice Chat**: Talk to your AI peon and tell him what todo - no more typing
 - **File Operations**: Read, write, search, and modify files directly from the chat
 - **Context Awareness**: Understands your current workspace and selected files

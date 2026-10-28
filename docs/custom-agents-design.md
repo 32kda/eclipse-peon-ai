@@ -23,12 +23,20 @@ tools:                        # optional; absent = all tools
   - grep
   - read_
   - mcp__docs__search
+mcp-servers:                  # optional; absent = all workspace-enabled MCP servers
+  - docs                    # empty list = no MCP servers
 ---
 <markdown body = system prompt, appended to the shared default prompt>
 ```
 
 - `tools` accepts a YAML block list or inline CSV (`tools: grep, read_`).
-- Absent `tools` ⇒ `null` ⇒ **all** tools; empty list ⇒ nothing.
+- Absent `tools` ⇒ `null` ⇒ **all built-in tools** plus contributed tools whose
+  `defaultEnabled` is true; an empty list ⇒ nothing. Contributed tools (from the `tool` or
+  `mcpServer` extension points) are **opt-in by default** — name them explicitly (exact name or
+  prefix) to enable them.
+- `mcp-servers` scopes the workspace-shared MCP pool per agent: absent = all workspace-enabled
+  servers, an explicit list = only those server names, an empty list = no MCP servers. The
+  `tools` allowlist still filters individual MCP tool names.
 - Keys are lower-cased during parse. `PromptYmlParser.getValue()` falls back across
   hyphen/underscore variants: `read-only` ↔ `read_only` ↔ `readonly` all resolve to the same key.
 
