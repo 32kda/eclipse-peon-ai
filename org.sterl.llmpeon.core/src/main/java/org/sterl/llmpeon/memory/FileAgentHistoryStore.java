@@ -15,7 +15,7 @@ import dev.langchain4j.data.message.ChatMessageSerializer;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class FileAgentHistoryStore {
+public class FileAgentHistoryStore implements AgentHistoryStore {
 
     private final Path historyFile;
 
@@ -23,6 +23,7 @@ public class FileAgentHistoryStore {
         this.historyFile = historyFile;
     }
 
+    @Override
     public List<ChatMessage> load() {
         if (!Files.isRegularFile(historyFile)) return List.of();
 
@@ -39,16 +40,19 @@ public class FileAgentHistoryStore {
         }
     }
 
+    @Override
     public void append(ChatMessage message) throws IOException {
         append(List.of(message));
     }
 
+    @Override
     public void append(List<ChatMessage> messages) throws IOException {
         if (messages == null || messages.isEmpty()) return;
         Files.createDirectories(historyFile.getParent());
         Files.writeString(historyFile, toJsonl(messages), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
 
+    @Override
     public void persist(List<ChatMessage> messages) throws IOException {
         Files.createDirectories(historyFile.getParent());
         if (messages == null || messages.isEmpty()) {
@@ -66,12 +70,18 @@ public class FileAgentHistoryStore {
         }
     }
 
+    @Override
     public void clear() throws IOException {
         Files.deleteIfExists(historyFile);
     }
 
     public Path historyFile() {
         return historyFile;
+    }
+
+    @Override
+    public java.util.Optional<Path> backingFile() {
+        return java.util.Optional.of(historyFile);
     }
 
     private static String toJsonl(List<ChatMessage> messages) {

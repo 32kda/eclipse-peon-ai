@@ -13,6 +13,7 @@ import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.ThinkResolver;
 import org.sterl.llmpeon.context.ContextItem;
+import org.sterl.llmpeon.memory.AgentHistoryStore;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
@@ -58,9 +59,13 @@ public class AiPoAgent extends AbstractAgent {
 
     public AiPoAgent(ConfiguredChatModel configuredModel, ToolService toolService, Path historyStateDir,
             List<NamedAgent> slaves) {
-        super(configuredModel, toolService,
-                historyStateDir == null ? new ThreadSafeMemory()
-                        : new ThreadSafeMemory(new FileAgentHistoryStore(historyFile(historyStateDir, NAME))));
+        this(configuredModel, toolService, historyStateDir == null ? null
+                : new FileAgentHistoryStore(historyFile(historyStateDir, NAME)), slaves);
+    }
+
+    public AiPoAgent(ConfiguredChatModel configuredModel, ToolService toolService,
+            AgentHistoryStore historyStore, List<NamedAgent> slaves) {
+        super(configuredModel, toolService, new ThreadSafeMemory(historyStore));
         this.slaves = List.copyOf(slaves);
     }
 

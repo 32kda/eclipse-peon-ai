@@ -3,6 +3,7 @@ package org.sterl.llmpeon.agent;
 import java.nio.file.Path;
 
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.memory.AgentHistoryStore;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.prompt.PromptLoader;
@@ -26,8 +27,19 @@ public class AiDevAgent extends AbstractAgent {
     public AiDevAgent(ConfiguredChatModel configuredModel,
             ToolService toolService,
             Path historyStateDir) {
-        super(configuredModel, toolService,
-                historyStateDir == null ? new ThreadSafeMemory() : new ThreadSafeMemory(new FileAgentHistoryStore(historyFile(historyStateDir, NAME))));
+        this(configuredModel, toolService, historyStateDir == null ? null
+                : new FileAgentHistoryStore(historyFile(historyStateDir, NAME)));
+    }
+
+    public AiDevAgent(ConfiguredChatModel configuredModel, ToolService toolService,
+            AgentHistoryStore historyStore) {
+        super(configuredModel, toolService, new ThreadSafeMemory(historyStore));
+    }
+
+    /** Durable Dev slave with an earlier compaction budget. */
+    public AiDevAgent(ConfiguredChatModel configuredModel, ToolService toolService,
+            AgentHistoryStore historyStore, double compactFactor) {
+        super(configuredModel, toolService, new ThreadSafeMemory(historyStore), compactFactor);
     }
 
     @Override

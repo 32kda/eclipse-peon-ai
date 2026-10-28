@@ -115,9 +115,12 @@ public abstract class AbstractAgent implements AiAgent {
     /**
      * Apply only static filters to tools -- any change kills the KV cache!
      * https://github.com/ggml-org/llama.cpp/issues/22746#issuecomment-4630455537
+     *
+     * <p>Bundle-contributed tools are opt-in: built-in agents only see the built-in tool set.
+     * A custom agent enables a contributed tool by naming it in its {@code tools:} allowlist.</p>
      */
     protected Predicate<SmartToolExecutor> getToolFilter() {
-        return p -> true;
+        return exec -> !exec.isContributed() || exec.isDefaultEnabled();
     }
 
     /**
@@ -137,6 +140,12 @@ public abstract class AbstractAgent implements AiAgent {
     /** Reuses {@link #getToolNameFilter()} (the MCP name allowlist). */
     @Override
     public boolean isMcpToolActive(String toolName) {
+        return getToolNameFilter().test(toolName);
+    }
+
+    /** Reuses {@link #getToolNameFilter()} (the name allowlist) for hint/catalog gating. */
+    @Override
+    public boolean isToolNameActive(String toolName) {
         return getToolNameFilter().test(toolName);
     }
 

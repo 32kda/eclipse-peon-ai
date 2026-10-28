@@ -13,6 +13,8 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.LocationEvent;
 import org.eclipse.swt.browser.LocationListener;
+import org.eclipse.swt.browser.ProgressAdapter;
+import org.eclipse.swt.browser.ProgressEvent;
 import org.eclipse.swt.browser.TitleEvent;
 import org.eclipse.swt.browser.TitleListener;
 import org.eclipse.swt.layout.FillLayout;
@@ -72,14 +74,18 @@ public class ChatMarkdownWidget extends Composite {
             @Override
             public void changed(TitleEvent event) {
                 if ("javaReady".equals(event.title)) {
-                    EclipseUtil.runInUiThread(parent, () -> {
-                        browserReady = true;
-                        String json;
-                        while ((json = pendingMessages.poll()) != null) {
-                            browser.execute("window.dispatchEvent(new MessageEvent('message', {data: " + json + "}));");
-                        }
-                    });
+                    markBrowserReady();
                 }
+            }
+        });
+
+        // The title signal can be missed when clear() reloads the same HTML (the title does not
+        // change), leaving every queued message invisible. The load-completed event is the
+        // authoritative ready signal; the title remains a fast-path fallback.
+        browser.addProgressListener(new ProgressAdapter() {
+            @Override
+            public void completed(ProgressEvent event) {
+                markBrowserReady();
             }
         });
 
@@ -168,13 +174,27 @@ public class ChatMarkdownWidget extends Composite {
         try {
             String json = mapper.writeValueAsString(payload);
             if (browserReady) {
-                browser.execute("window.dispatchEvent(new MessageEvent('message', {data: " + json + "}));");
+                dispatchToBrowser(json);
             } else {
                 pendingMessages.add(json);
             }
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /** Marks the page usable and drains every message queued while it was loading. */
+    private void markBrowserReady() {
+        if (browserReady) return;
+        browserReady = true;
+        String json;
+        while ((json = pendingMessages.poll()) != null) {
+            dispatchToBrowser(json);
+        }
+    }
+
+    private void dispatchToBrowser(String json) {
+        browser.execute("window.dispatchEvent(new MessageEvent('message', {data: " + json + "}));");
     }
 
     public void setShowRealtimeAiResponse(boolean show) {

@@ -1,779 +1,384 @@
 package org.sterl.llmpeon.parts;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.ILog;
-import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
-import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.e4.ui.di.Focus;
 import org.eclipse.e4.ui.services.IServiceConstants;
-import org.eclipse.jdt.core.IClassFile;
-import org.eclipse.jdt.core.IJavaElement;
-import org.eclipse.jdt.core.IType;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.viewers.ISelection;
-import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.custom.CTabFolder2Adapter;
+import org.eclipse.swt.custom.CTabFolderEvent;
+import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.layout.RowLayout;
+import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
-import org.eclipse.ui.IWorkingSet;
-import org.sterl.llmpeon.agent.AiAgent;
-import org.sterl.llmpeon.agent.AiAgentStatusModel;
-import org.sterl.llmpeon.model.CompactResult;
-import org.sterl.llmpeon.agent.NamedAgent;
-import org.sterl.llmpeon.ai.LlmConfig;
-import org.sterl.llmpeon.command.SlashCommandResolver;
-import org.sterl.llmpeon.command.SlashCommandResolver.SlashResult;
-import org.sterl.llmpeon.context.SimpleContextItem;
-import org.sterl.llmpeon.exception.ExceptionUtil;
-import org.sterl.llmpeon.parts.ai.PeonAiService;
-import org.sterl.llmpeon.parts.config.LlmPreferenceInitializer;
-import org.sterl.llmpeon.parts.config.McpConnectionService;
-import org.sterl.llmpeon.parts.config.McpPreferenceInitializer;
-import org.sterl.llmpeon.parts.config.VoicePreferenceInitializer;
-import org.sterl.llmpeon.parts.log.EclipseSlf4jLogger;
-import org.sterl.llmpeon.parts.monitor.EclipseAiMonitor;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PlatformUI;
+import org.sterl.llmpeon.parts.session.SessionPanel;
+import org.sterl.llmpeon.parts.session.SessionServices;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
-import org.sterl.llmpeon.parts.widget.ActionsBarWidget;
-import org.sterl.llmpeon.parts.widget.ChatMarkdownWidget;
-import org.sterl.llmpeon.parts.widget.HeaderBarWidget;
-import org.sterl.llmpeon.parts.widget.StatusLineWidget;
-import org.sterl.llmpeon.parts.widget.StatusLineWidget.SkillMenuSelection;
-import org.sterl.llmpeon.parts.widget.UserInputWidget;
-import org.sterl.llmpeon.parts.widget.UserQuestionResponseWidget;
-import org.sterl.llmpeon.prompt.model.SimplePromptFile;
-import org.sterl.llmpeon.shared.OnPartialAiResponse;
-import org.sterl.llmpeon.shared.SimpleDiff;
-import org.sterl.llmpeon.shared.StringUtil;
-import org.sterl.llmpeon.skill.SkillSource;
-import org.sterl.llmpeon.tool.model.SimpleMessage;
-import org.sterl.llmpeon.tool.model.SimpleMessage.Type;
-import org.sterl.llmpeon.parts.shell.ShellApprovalService;
-import org.sterl.llmpeon.tool.tools.CompactSessionTool;
-import org.sterl.llmpeon.voice.VoiceConfig;
-import org.sterl.llmpeon.voice.VoiceInputService;
+import org.sterl.llmpeon.session.SessionId;
+import org.sterl.llmpeon.session.SessionService;
+import org.sterl.llmpeon.session.SessionTabController;
+import org.sterl.llmpeon.session.SessionSummary;
 
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import jakarta.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
-public class AIChatView implements EclipseAiMonitor {
+/**
+ * Session shell: one Eclipse view with an internal tab per chat session.
+ *
+ * <p>The editor stays in the Eclipse editor area. Editor selection is forwarded only to the
+ * active session tab; model/skill/status controls live inside each {@link SessionPanel}.</p>
+ */
+public class AIChatView {
 
     private static final ILog LOG = Platform.getLog(AIChatView.class);
 
-    // Declared first so the aiService field initializer lambdas can capture them
-    // without violating the Java forward-reference restriction.
-    // All are null until @PostConstruct runs; the lambdas are only ever invoked after that.
+    private static final String PREF_OPEN_SESSIONS = PeonConstants.PLUGIN_ID + ".sessions.open";
+    private static final String PREF_ACTIVE_SESSION = PeonConstants.PLUGIN_ID + ".sessions.active";
+
+    private final SessionService sessions = SessionServices.INSTANCE.sessions();
+    private final SessionTabController tabsModel = new SessionTabController();
+    private final Map<SessionId, SessionPanel> panels = new ConcurrentHashMap<>();
+    private final Map<SessionId, CTabItem> items = new ConcurrentHashMap<>();
+
     private Composite parent;
-    private ActionsBarWidget actionsBar;
-    private StatusLineWidget statusLine;
+    private CTabFolder tabs;
+    private Menu historyMenu;
+    private Button historyButton;
 
-    private final PeonAiService aiService = new PeonAiService(
-        this::doSendMessage,
-        file -> EclipseUtil.runInUiThread(parent, () -> EclipseUtil.openInEditor(file)),
-        enabled -> EclipseUtil.runInUiThread(parent, () -> statusLine.setMcpEnabled(enabled)),
-        () -> EclipseUtil.runInUiThread(parent, this::refreshAgentUI),
-        LlmPreferenceInitializer.buildWithDefaults().build(),
-        this::showQuestion
-    );
+    private volatile boolean disposing;
 
-    /** R-TC-9: shell-approval wiring — autonomy is evaluated per shell call (R-TC-7),
-     *  so an agent switch needs no provider refresh. */
-    private final ShellApprovalService shellApproval = new ShellApprovalService(
-        aiService.getSharedToolService(), this::showQuestion, aiService::getActiveAgent);
+    private ISelection lastSelection;
+    private ITextSelection lastTextSelection;
+    private Object lastSelectedObject;
 
-    private final AtomicReference<IProgressMonitor> monitorRef = new AtomicReference<>(new NullProgressMonitor());
-    /** R-ST1: submitted-but-unfinished turn jobs. Submit increments (UI thread, pre-schedule),
-     *  the finally's UI-runnable decrements — commit (reset+unlock) belongs to the LAST finisher. */
-    private final AtomicInteger inFlightTurns = new AtomicInteger();
-    private final VoiceInputService voiceService = new VoiceInputService();
-
-    private volatile boolean recording = false;
-
-    private HeaderBarWidget headerBar;
-
-    private volatile LlmConfig lastAppliedConfig = null;
-
-    private ChatMarkdownWidget chatHistory;
-    private Composite inputBlock;
-    private UserInputWidget chatInput;
-    private UserQuestionResponseWidget questionWidget;
+    private final Runnable sessionListener = () -> {
+        if (parent == null || parent.isDisposed()) return;
+        EclipseUtil.runInUiThread(parent, this::refreshTabs);
+    };
 
     private final IPreferenceChangeListener prefListener = event -> {
-        EclipseUtil.runInUiThread(parent, this::applyConfig);
+        if (parent == null || parent.isDisposed()) return;
+        EclipseUtil.runInUiThread(parent, () -> panels.values().forEach(SessionPanel::applyConfig));
     };
 
     @PostConstruct
     public void createPartControl(Composite parent) {
         this.parent = parent;
-        // No gap between header and chat history — they read as one surface.
-        GridLayout rootLayout = new GridLayout(1, false);
-        rootLayout.verticalSpacing = 0;
-        parent.setLayout(rootLayout);
+        var layout = new GridLayout(1, false);
+        layout.marginWidth = 0;
+        layout.marginHeight = 0;
+        layout.verticalSpacing = 0;
+        parent.setLayout(layout);
 
-        headerBar = new HeaderBarWidget(parent, SWT.NONE,
-                () -> aiService.getActiveAgent().getName(),
-                aiService::getToolStatus,
-                aiService::getStatusAgents,
-                this::doCompressAgent,
-                () -> inFlightTurns.get() > 0);
-        headerBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        tabs = new CTabFolder(parent, SWT.CLOSE);
+        tabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        tabs.setSimple(false);
+        tabs.setUnselectedCloseVisible(true);
 
-        // Borderless — a border's top edge would read as a divider against the flush header.
-        chatHistory = new ChatMarkdownWidget(parent, SWT.NONE);
-        chatHistory.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-
-        // inputBlock carries the single outer border for the entire input area (sections 2+3+4).
-        // No background manipulation needed — SWT native widgets render their own correct backgrounds.
-        inputBlock = new Composite(parent, SWT.BORDER);
-        GridLayout inputBlockLayout = new GridLayout(1, false);
-        inputBlockLayout.marginWidth = 0;
-        inputBlockLayout.marginHeight = 0;
-        inputBlockLayout.verticalSpacing = 0;
-        inputBlock.setLayout(inputBlockLayout);
-        // Restore the gap above the input block only (root verticalSpacing is 0).
-        GridData inputBlockData = new GridData(SWT.FILL, SWT.BOTTOM, true, false);
-        inputBlockData.verticalIndent = 5;
-        inputBlock.setLayoutData(inputBlockData);
-
-        chatInput = new UserInputWidget(inputBlock, SWT.NONE,
-            this::doSendMessage,
-            () -> getIProgressMonitor().setCanceled(true),
-            this::onMicClick);
-        chatInput.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
-        questionWidget = new UserQuestionResponseWidget(inputBlock, SWT.NONE, this::hideQuestion);
-        GridData qgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        qgd.exclude = true;
-        questionWidget.setLayoutData(qgd);
-        questionWidget.setVisible(false);
-
-        actionsBar = new ActionsBarWidget(inputBlock, SWT.NONE,
-            this::onClear,
-            this::onHandoff,
-            this::onAgentChange,
-            this::doCompressContext
-        );
-
-        statusLine = new StatusLineWidget(inputBlock, SWT.NONE,
-            this::onPinChange,
-            this::onSkillsToggle,
-            enabled -> aiService.getMcpConnectionService().toggle(enabled)
-        );
-
-        statusLine.setSkillsMenuHandler(
-            () -> aiService.getSkillService().getAllLoadedSkills(),
-            this::onSkillMenuSelection
-        );
-
-        applyConfig();
-        refreshChat();
-
-        var prefs = InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID);
-        prefs.addPreferenceChangeListener(prefListener);
-        updateSelectedProject(EclipseUtil.firstOpenOrSelectedProject());
-
-        chatInput.enableSlashCommands(() -> {
-            var result = new ArrayList<SimplePromptFile>();
-            result.addAll(aiService.getCommandService().getCommands());
-            result.addAll(aiService.getSkillService().getSkills());
-            return result;
+        createTopRight();
+        tabs.addListener(SWT.Selection, e -> onTabActivated());
+        tabs.addCTabFolder2Listener(new CTabFolder2Adapter() {
+            @Override
+            public void close(CTabFolderEvent event) {
+                if (event.item instanceof CTabItem item) {
+                    event.doit = false; // we own the close flow
+                    closeTab((SessionId) item.getData());
+                }
+            }
         });
+
+        tabsModel.setListener(this::onTabsModelChanged);
+        sessions.addChangeListener(sessionListener);
+        InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID)
+                .addPreferenceChangeListener(prefListener);
+
+        restoreOpenTabs();
     }
 
-    private void onClear() {
-        aiService.clear();
-        chatHistory.clear();
-        actionsBar.updateCompact(0, aiService.getConfig().getAutoCompactAfter());
-        headerBar.refreshRoster(); // reflect cleared token counts in the agent header
+    private void createTopRight() {
+        var topRight = new Composite(tabs, SWT.NONE);
+        var layout = new RowLayout(SWT.HORIZONTAL);
+        layout.marginTop = 0;
+        layout.marginBottom = 0;
+        layout.marginLeft = 4;
+        layout.marginRight = 4;
+        layout.spacing = 4;
+        topRight.setLayout(layout);
+
+        var newButton = new Button(topRight, SWT.PUSH);
+        newButton.setImage(PlatformUI.getWorkbench().getSharedImages()
+                .getImage(ISharedImages.IMG_OBJ_ADD));
+        newButton.setToolTipText("New chat session");
+        newButton.addListener(SWT.Selection, e -> newSession());
+
+        historyButton = new Button(topRight, SWT.PUSH);
+        historyButton.setText("History");
+        historyButton.setToolTipText("Open a previous chat session");
+        historyButton.addListener(SWT.Selection, e -> showHistoryMenu());
+        historyMenu = new Menu(historyButton);
+
+        tabs.setTopRight(topRight);
+    }
+
+    private void restoreOpenTabs() {
+        var prefs = InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID);
+        var open = parseIds(prefs.get(PREF_OPEN_SESSIONS, ""));
+        var active = parseId(prefs.get(PREF_ACTIVE_SESSION, null));
+
+        var valid = new ArrayList<SessionId>();
+        for (var id : open) {
+            if (sessions.exists(id)) valid.add(id);
+        }
+        tabsModel.restore(valid, active);
+
+        for (var id : tabsModel.openIds()) createTabItem(id);
+        var activeId = tabsModel.active();
+        if (activeId == null) {
+            newSession();
+        } else {
+            var item = items.get(activeId);
+            if (item != null) tabs.setSelection(item);
+            ensurePanel(activeId);
+            applyLastSelection(activeId);
+        }
+    }
+
+    private void newSession() {
+        var id = sessions.create("New chat");
+        openTab(id, true);
+    }
+
+    private void openTab(SessionId id, boolean activate) {
+        if (id == null) return;
+        if (panels.containsKey(id) && activate) {
+            var existing = items.get(id);
+            if (existing != null) {
+                tabs.setSelection(existing);
+                tabsModel.activate(id);
+                ensurePanel(id);
+                applyLastSelection(id);
+            }
+            return;
+        }
+        tabsModel.open(id);
+        createTabItem(id);
+        if (activate) {
+            var item = items.get(id);
+            if (item != null) tabs.setSelection(item);
+            tabsModel.activate(id);
+            ensurePanel(id);
+            applyLastSelection(id);
+        }
+    }
+
+    private void createTabItem(SessionId id) {
+        if (items.containsKey(id)) return;
+        var item = new CTabItem(tabs, SWT.CLOSE);
+        item.setData(id);
+        item.setText(sessions.get(id).title());
+        item.setToolTipText(sessions.get(id).title());
+        items.put(id, item);
+    }
+
+    private void ensurePanel(SessionId id) {
+        if (id == null || disposing) return;
+        if (panels.containsKey(id)) return;
+        var item = items.get(id);
+        if (item == null) createTabItem(id);
+        item = items.get(id);
+        if (item == null || item.isDisposed()) return;
+
+        var panel = new SessionPanel(tabs, sessions, id,
+                () -> EclipseUtil.runInUiThread(parent, this::refreshTabs));
+        item.setControl(panel);
+        panels.put(id, panel);
+        refreshTabs();
+    }
+
+    private SessionPanel activePanel() {
+        var id = tabsModel.active();
+        if (id == null) return null;
+        ensurePanel(id);
+        return panels.get(id);
+    }
+
+    private void onTabActivated() {
+        var item = tabs.getSelection();
+        if (item == null || !(item.getData() instanceof SessionId id)) return;
+        tabsModel.activate(id);
+        ensurePanel(id);
+        var panel = panels.get(id);
+        if (panel != null && !panel.isDisposed()) panel.focusInput();
+        applyLastSelection(id);
+        saveOpenState();
+    }
+
+    private void applyLastSelection(SessionId id) {
+        var panel = panels.get(id);
+        if (panel == null || panel.isDisposed()) return;
+        if (lastTextSelection != null) panel.applyTextSelection(lastTextSelection);
+        else if (lastSelectedObject != null) panel.applySelection(lastSelectedObject);
+        else if (lastSelection != null) panel.applySelection(lastSelection);
+    }
+
+    private void closeTab(SessionId id) {
+        if (id == null) return;
+        var panel = panels.remove(id);
+        if (panel != null && !panel.isDisposed()) panel.dispose();
+        var item = items.remove(id);
+        if (item != null && !item.isDisposed()) item.dispose();
+        tabsModel.close(id);
+        if (tabsModel.openIds().isEmpty()) {
+            newSession();
+        }
+        saveOpenState();
+        refreshTabs();
+    }
+
+    private void onTabsModelChanged() {
+        saveOpenState();
+        refreshTabs();
+    }
+
+    private void saveOpenState() {
+        var prefs = InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID);
+        prefs.put(PREF_OPEN_SESSIONS, tabsModel.openIds().stream()
+                .map(SessionId::toString).reduce((a, b) -> a + "," + b).orElse(""));
+        var active = tabsModel.active();
+        if (active == null) prefs.remove(PREF_ACTIVE_SESSION);
+        else prefs.put(PREF_ACTIVE_SESSION, active.toString());
+    }
+
+    private void refreshTabs() {
+        if (disposing || parent == null || parent.isDisposed()) return;
+        for (var id : tabsModel.openIds()) {
+            var item = items.get(id);
+            if (item == null || item.isDisposed()) continue;
+            var panel = panels.get(id);
+            var title = sessions.get(id).title();
+            String prefix = "";
+            if (panel != null) {
+                if (panel.hasQuestion()) prefix = "? ";
+                else if (panel.isWorking()) prefix = "● ";
+            }
+            var text = prefix + title;
+            if (!text.equals(item.getText())) item.setText(text);
+            if (!title.equals(item.getToolTipText())) item.setToolTipText(title);
+        }
+        if (historyButton != null && !historyButton.isDisposed()) {
+            historyButton.setEnabled(true);
+        }
+    }
+
+    private void showHistoryMenu() {
+        if (historyMenu == null || historyMenu.isDisposed()) return;
+        for (var item : historyMenu.getItems()) item.dispose();
+
+        List<SessionSummary> all = sessions.list();
+        if (all.isEmpty()) {
+            var empty = new MenuItem(historyMenu, SWT.NONE);
+            empty.setText("No saved sessions");
+            empty.setEnabled(false);
+        } else {
+            for (var summary : all) {
+                var item = new MenuItem(historyMenu, SWT.NONE);
+                item.setText(summary.title());
+                item.setToolTipText(summary.updatedAt() == null ? summary.title()
+                        : summary.title() + " — " + summary.updatedAt());
+                item.addListener(SWT.Selection, e -> openTab(summary.id(), true));
+            }
+        }
+        historyMenu.setVisible(true);
+    }
+
+    private static List<SessionId> parseIds(String value) {
+        var result = new ArrayList<SessionId>();
+        if (value == null || value.isBlank()) return result;
+        for (var token : value.split(",")) {
+            var id = parseId(token);
+            if (id != null) result.add(id);
+        }
+        return result;
+    }
+
+    private static SessionId parseId(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return SessionId.parse(value.strip());
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     @PreDestroy
     public void dispose() {
-        if (questionWidget != null) questionWidget.cancelSilently();
-        InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID).removePreferenceChangeListener(prefListener);
-        aiService.disconnectMcp();
-        voiceService.close();
+        disposing = true;
+        saveOpenState();
+        InstanceScope.INSTANCE.getNode(PeonConstants.PLUGIN_ID)
+                .removePreferenceChangeListener(prefListener);
+        sessions.removeChangeListener(sessionListener);
+        for (var panel : new ArrayList<>(panels.values())) {
+            if (panel != null && !panel.isDisposed()) panel.dispose();
+        }
+        panels.clear();
+        items.clear();
     }
 
     @Focus
     public void setFocus() {
-        if (questionWidget != null && questionWidget.isVisible()) questionWidget.setFocus();
-        else if (chatInput != null) chatInput.setFocus();
+        var panel = activePanel();
+        if (panel != null && !panel.isDisposed()) panel.focusInput();
     }
 
     // -------------------------------------------------------------------------
-    // Eclipse selection injection
+    // Eclipse selection injection: only the active session gets it.
     // -------------------------------------------------------------------------
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onSelection(@Named(IServiceConstants.ACTIVE_SELECTION) ISelection s) {
-        if (s == null || s.isEmpty()) onSelection((Object)null);
-        else if (s instanceof IStructuredSelection iss) {
-            if (iss.size() == 1) onSelection(iss.getFirstElement());
-            else onSelection(iss.toArray());
-        }
+        lastSelection = s;
+        var panel = activePanel();
+        if (panel != null) panel.applySelection(s);
     }
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onTextSelection(@Named(IServiceConstants.ACTIVE_SELECTION) ITextSelection ts) {
-        applyTextSelection(ts);
-    }
-
-    /**
-     * Applies a text selection event (UI thread): the open file becomes the selected resource
-     * first — a file switch clears the previous selection — then the selection itself is set.
-     */
-    private void applyTextSelection(ITextSelection ts) {
-        var uc = aiService.getUserContext();
-        boolean changed = false;
-        if (parent != null && !parent.isDisposed()) {
-            // R-SEL-2: open file = known resource (UI-thread path of EclipseUtil.getOpenFile)
-            changed |= uc.setSelectedResource(EclipseUtil.getOpenFile().orElse(null));
-        }
-        changed |= uc.setTextSelection(ts);   // nachher: Resource-Wechsel hat alte Selektion bereits geräumt
-        if (changed) EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+        lastTextSelection = ts;
+        var panel = activePanel();
+        if (panel != null) panel.applyTextSelection(ts);
     }
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onSelection(@Named(IServiceConstants.ACTIVE_SELECTION) Object o) {
-        if (o instanceof ITextSelection ts) {
-            applyTextSelection(ts);
-            return;
-        }
-        if (parent == null || parent.isDisposed()) return;
-
-        var selectionElement = EclipseUtil.selectionElement(o).orElse(null);
-        // R-SEL-4: a type selection wins — it must be detected BEFORE resolveResource, which
-        // would resolve a source IType to its .java file and kill the type. Resource and
-        // project stay untouched on a type event.
-        if (selectionElement instanceof IType || selectionElement instanceof IClassFile) {
-            if (aiService.getUserContext().setJavaType((IJavaElement) selectionElement))
-                EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
-            return;
-        }
-        var selection = EclipseUtil.resolveResource(selectionElement).orElse(null);
-        if (selection == null && selectionElement != null && !(selectionElement instanceof IWorkingSet)
-                && !selectionElement.getClass().getName().equals("org.eclipse.ui.internal.views.log.LogEntry")
-                && aiService.getConfig().isDebugMode()) {
-            LOG.info("Unknown resource type selected " + selectionElement.getClass());
-        }
-        if (aiService.getUserContext().setSelectedResource(selection)) {
-            EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
-        }
-        updateSelectedProject(EclipseUtil.resolveProject(selection));
-    }
-
-    private void updateSelectedProject(IProject project) {
-        if (project != null && !aiService.getUserContext().isProjectPinned()) {
-            var changed = aiService.setProject(project);
-            if (changed) refreshStatusLine();
-        }
+        lastSelectedObject = o;
+        var panel = activePanel();
+        if (panel != null) panel.applySelection(o);
     }
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onSelection(@Named(IServiceConstants.ACTIVE_SELECTION) Object[] selectedObjects) {
-        if (selectedObjects != null && selectedObjects.length > 0) {
-            onSelection(selectedObjects[0]);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // EclipseAiMonitor
-    // -------------------------------------------------------------------------
-
-    @Override
-    public void onChatMessage(int iteration, ChatRequest.Builder request) {
-        chatHistory.updateLiveResponseInUIThread("waiting for AI...", 0, null);
-        // First loop callback where the agent's working flag is already true — light up the 🟢.
-        EclipseUtil.runInUiThread(parent, () -> headerBar.refreshRoster());
-    }
-
-    @Override
-    public void onChatResponse(SimpleMessage m) {
-        EclipseUtil.runInUiThread(parent, () -> {
-            var ai = aiService.getActiveAgent();
-
-            if (m.role() == Type.TOOL) {
-                if (m.message().startsWith(CompactSessionTool.TOOL_MESSAGE_PREFIX)
-                        && m.message().contains(ai.getName()) ) {
-                    refreshChat();
-                }
-                chatHistory.updateLiveResponse(m.message(), 0, "");
-            }
-
-            chatHistory.appendMessage(m);
-            actionsBar.updateCompact(ai.getMemory().getTotalTokenUsed(), aiService.getConfig().getAutoCompactAfter());
-            headerBar.refreshRoster();
-        });
-    }
-
-    @Override
-    public void onCallCompleted(dev.langchain4j.model.chat.response.ChatResponse response, Duration duration) {
-        EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
-    }
-
-    @Override
-    public void onTokenUsage(dev.langchain4j.model.output.TokenUsage usage) {
-        EclipseUtil.runInUiThread(parent, () -> {
-            headerBar.addTokenUsage(usage);
-            headerBar.refreshRoster();
-        });
-    }
-
-    @Override
-    public void onStreamingChunk(OnPartialAiResponse r) {
-        if (parent.isDisposed()) return;
-        EclipseUtil.runInUiThread(parent, () -> chatHistory.onStreamingChunk(r));
-    }
-
-    @Override
-    public void onFileUpdate(AiFileUpdate update) {
-        if (parent.isDisposed()) return;
-        var diff = SimpleDiff.unifiedDiff(update.file(), update.oldContent(), update.newContent());
-        EclipseUtil.runInUiThread(parent, () -> {
-            if (diff.startsWith("--- a/")) chatHistory.showDiff(diff);
-            else if (!diff.isEmpty()) chatHistory.appendMessage(new SimpleMessage(Type.TOOL, diff));
-        });
-    }
-
-    @Override
-    public IProgressMonitor getIProgressMonitor() {
-        return IProgressMonitor.nullSafe(monitorRef.get());
-    }
-
-    @Override
-    public boolean isCanceled() {
-        return getIProgressMonitor().isCanceled();
-    }
-
-    // -------------------------------------------------------------------------
-    // UI refresh
-    // -------------------------------------------------------------------------
-
-    // TODO: DOUBLE CHECK if refreshStatusLine and refreshChat are 2 methods!
-    public void refreshStatusLine() {
-        if (statusLine == null) return;
-        if (actionsBar == null) return;
-
-        var skills = aiService.getSkillService().getSkills();
-        statusLine.update(
-            skills.size(),
-            (int) skills.stream().filter(s -> s.getSource() == SkillSource.PROJECT).count(),
-            aiService.getProject(),
-            aiService.getUserContext().getSelectedFile()
-        );
-
-        var ai = aiService.getActiveAgent();
-        actionsBar.updateCompact(ai.getMemory().getTotalTokenUsed(), aiService.getConfig().getAutoCompactAfter());
-    }
-
-    /**
-     * clears the chat history and rebuilds it.
-     * Also calls refresh refreshStatusLine.
-     */
-    private void refreshChat() {
-        var memory = aiService.getActiveAgent().getMemory();
-        chatHistory.clear();
-        memory.forEach(chatHistory::appendMessage);
-        refreshStatusLine();
-    }
-
-    // -------------------------------------------------------------------------
-    // Config / model loading
-    // -------------------------------------------------------------------------
-
-    /** Refresh agent combo and status after a config reload. */
-    private void refreshAgentUI() {
-        actionsBar.setAgents(aiService.getAgents());
-        actionsBar.updateModeUI(aiService.getActiveAgent());
-        refreshChat();
-    }
-
-    private void applyConfig() {
-        var config = LlmPreferenceInitializer.buildWithDefaults();
-        EclipseSlf4jLogger.setDebug(config.isDebugMode());
-        LOG.info("Set new config " + config);
-        // ensure we set the voice config as we break later ...
-        chatInput.setVoiceInputVisible(VoicePreferenceInitializer.buildWithDefaults().enabled());
-        chatHistory.setShowRealtimeAiResponse(config.isShowRealtimeAiResponse());
-
-        // MCP is applied on every preference change, INDEPENDENTLY of the LlmConfig gate below —
-        // otherwise an MCP-only change (LlmConfig unchanged) would never reconnect (R-MCP1).
-        applyMcpConfig();
-
-        // Shell-Confirmation is applied on every preference change, INDEPENDENTLY of the LlmConfig
-        // gate below — LlmConfig no longer carries the shell pref (clean break), so a shell-only
-        // change would early-return otherwise (same pattern as applyMcpConfig, R-MCP1).
-        shellApproval.applyConfiguration();
-
-        if (lastAppliedConfig != null && lastAppliedConfig.equals(config)) return;
-        lastAppliedConfig = config;
-        aiService.updateConfig(config);
-
-        actionsBar.setAgents(aiService.getAgents());
-        actionsBar.updateModeUI(aiService.getActiveAgent());
-        refreshStatusLine();
-    }
-
-    private void applyMcpConfig() {
-        var servers = McpPreferenceInitializer.loadServers();
-        statusLine.setMcpAvailable(!servers.isEmpty());
-        statusLine.setMcpEnabled(McpConnectionService.isEnabled());
-        aiService.applyMcpConfig();
-    }
-
-    // -------------------------------------------------------------------------
-    // Actions
-    // -------------------------------------------------------------------------
-
-    private void onAgentChange(AiAgent mode) {
-        aiService.setActiveAgent(mode);
-
-        // The header status widget pulls the new agent's team live on the next refresh — nothing to
-        // reset here (the old onSubAgent chip state is gone; the widget holds no per-agent state).
-        headerBar.refreshRoster();
-
-        // Show scaffold tutorial on first activation
-        var tutorial = aiService.getScaffoldTutorial();
-        if (tutorial != null) {
-            onChatResponse(new SimpleMessage(Type.AI, tutorial));
-        }
-
-        // Jon on an empty, undocumented workspace: greet + explain how he works (no docs/index.md yet)
-        var poTutorial = aiService.getPoTutorial();
-        if (poTutorial != null) {
-            onChatResponse(new SimpleMessage(Type.AI, poTutorial));
-        }
-
-        refreshChat();
-    }
-
-    private void onHandoff() {
-        if (aiService.onHandoff()) {
-            AiAgent agent = aiService.getActiveAgent();
-            actionsBar.updateModeUI(agent);
-            this.refreshChat();
-            doSendMessage();
-        } else {
-            onChatResponse(new SimpleMessage(Type.PROBLEM, "Plan or Agent '" + aiService.getActiveAgent().handoverTo() + "' missing ..."));
-        }
-    }
-
-    private void doCompressContext() {
-        var active = aiService.getActiveAgent();
-        if (active.getMemory().size() < 3) return;
-        inFlightTurns.incrementAndGet();
-        LOG.info("turn submit (compress): agent=" + active.getName() + " in-flight=" + inFlightTurns.get());
-        lockWhileWorking(true);
-        Job.create("Compact " + active.getName() , monitor -> {
-            monitorRef.set(monitor);
-            Exception ex = null;
-            CompactResult result = null; // captured before the finally's monitorRef reset (async-state safety)
-            try {
-                result = active.compact(this);
-                if (result.status() == CompactResult.Status.COMPACTED) EclipseUtil.runInUiThread(parent, this::refreshChat);
-            } catch (Exception e) {
-                ex = handleChatException(e);
-            } finally {
-                handleDoneChatResponse(active, active.getName(), null, monitor, ex);
-            }
-            // same status line as the per-slave button (R-CIB-6: one behaviour, one implementation)
-            return PeonConstants.status(AiAgentStatusModel.compactResult(result, active.getName()), ex);
-        }).schedule();
-    }
-
-    /** Per-slave compact from the header roster: compresses exactly the clicked slave (R18 — no
-     *  cascade). Job mechanics mirror {@link #doCompressContext} except the chat is NOT rebuilt —
-     *  the compressor summary streams into the chat live via the monitor and stays; a rebuild
-     *  would replace it with the active agent's (uncompacted-here) memory. Only the roster
-     *  refreshes (context size visibly drops); the R16 skip (< 3 messages) surfaces as
-     *  "Nothing to compact" instead of a silent no-op. */
-    private void doCompressAgent(NamedAgent slave) {
-        var agent = slave.agent();
-        if (agent.isWorking() || inFlightTurns.get() > 0) return; // defensive — buttons are disabled
-        inFlightTurns.incrementAndGet();
-        LOG.info("turn submit (slave compact): agent=" + slave.uiName() + " in-flight=" + inFlightTurns.get());
-        lockWhileWorking(true);
-        Job.create("Compact " + slave.uiName(), monitor -> {
-            monitorRef.set(monitor);
-            Exception ex = null;
-            CompactResult result = null; // captured before the finally's monitorRef reset (async-state safety)
-            try {
-                result = agent.compact(this);
-                // NO refreshChat here — a rebuild from the ACTIVE agent's memory would wipe the
-                // streamed slave summary (it lives in the slave's memory, not the active one).
-                // Jon's own compact (doCompressContext / CompactSessionTool) still rebuilds.
-                EclipseUtil.runInUiThread(parent, headerBar::refreshRoster); // context size visibly drops
-            } catch (Exception e) {
-                ex = handleChatException(e);
-            } finally {
-                handleDoneChatResponse(agent, slave.uiName(), null, monitor, ex);
-            }
-            return PeonConstants.status(AiAgentStatusModel.compactResult(result, slave.uiName()), ex);
-        }).schedule();
-    }
-
-    private sealed interface SendDecision {
-        record Skip() implements SendDecision {}
-        record Submit(String messageOrNull) implements SendDecision {}
-    }
-
-    private void doSendMessage() {
-        if (StringUtil.hasNoValue(aiService.getActiveModel())) {
-            chatHistory.appendMessage(new SimpleMessage(Type.PROBLEM, "No model configured — open Window > Preferences > Peon AI"));
-            return;
-        }
-
-        var active = aiService.getActiveAgent();
-        final var text = StringUtil.strip(chatInput.getText().trim());
-        if (StringUtil.hasNoValue(text) && active.getMemory().size() == 0) return;
-
-        String messageToSend = null;
-
-        if (StringUtil.hasValue(text)) {
-            var decision = resolveOutgoingMessage(text, active);
-            if (decision instanceof SendDecision.Skip) return;
-            messageToSend = ((SendDecision.Submit) decision).messageOrNull();
-        } else if (active.isWorking()) {
-            return;
-        }
-
-        submitAiJob(messageToSend);
-    }
-
-    private SendDecision resolveOutgoingMessage(String text, AiAgent active) {
-        var resolver = new SlashCommandResolver();
-        var result = resolver.resolve(text, aiService.getCommandService(), aiService.getSkillService());
-
-        String trailing;
-        if (result.isPresent()) {
-            SlashResult r = result.get();
-            var label = r.isSkill() ? "Using 🧩: " + r.name() : "Using 🪄: " + r.name();
-            this.aiService.getUserContext().addOneTimeOrder(
-                    new SimpleContextItem(label, r.body())
-            );
-            chatHistory.appendMessage(new SimpleMessage(Type.TOOL, label));
-            trailing = StringUtil.hasValue(r.trailingText()) ? r.trailingText() : null;
-            if (trailing != null) {
-                chatHistory.appendMessage(new SimpleMessage(Type.USER, trailing));
-            }
-            chatInput.dismissSlashMenu();
-        } else {
-            trailing = text;
-            chatHistory.appendMessage(new SimpleMessage(Type.USER, text));
-        }
-        chatInput.clearText();
-
-        // TODO can we move this to the chat service?
-        if (active.isWorking()) {
-            if (trailing != null) {
-                boolean isNewEntry = active.queueMessage(trailing); // delegates to agent's queue
-                if (isNewEntry) {
-                    chatHistory.appendMessage(new SimpleMessage(Type.AI,
-                            "Noted, I will respond as soon as I finished..."));
-                }
-                chatHistory.updateLiveResponse("Noted user message ...", 0, "");
-            }
-            return new SendDecision.Skip();
-        }
-        return new SendDecision.Submit(trailing);
-    }
-
-    private void submitAiJob(String messageToSend) {
-        final var agent = aiService.getActiveAgent();
-        inFlightTurns.incrementAndGet();
-        LOG.info("turn submit: agent=" + agent.getName() + " in-flight=" + inFlightTurns.get());
-        lockWhileWorking(true);
-        Job.create("Peon AI request", monitor -> {
-            monitor.beginTask("Arbeit, Arbeit!", 100);
-            monitorRef.set(monitor);
-            Exception ex = null;
-            ChatResponse cr = null;
-            try {
-                cr = aiService.call(messageToSend, this);
-            } catch (Exception e) {
-                ex = handleChatException(e);
-            } finally {
-                handleDoneChatResponse(null, agent.getName(), cr, monitor, ex);
-            }
-            return PeonConstants.status("Peon AI\n" + aiService.getConfig(), ex);
-        }).schedule();
-    }
-
-    private void handleDoneChatResponse(@Nullable AiAgent compactedAgent, String agentName,
-            @Nullable ChatResponse cr, IProgressMonitor monitor, Exception ex) {
-        if (aiService.getConfig().isDebugMode()) {
-            LOG.info("Chatreponse for " + agentName + ": " + (cr == null ? "null" : cr.aiMessage()));
-        }
-        monitor.done();
-        // R-ST1: the commit decision lives INSIDE the UI runnable — UI-thread-serialized with
-        // the submits. A stale finally (newer run in flight) must touch neither monitorRef
-        // nor the lock. (IST reset the monitorRef on the job thread — that was the clobber.)
-        EclipseUtil.runInUiThread(parent, () -> {
-            int remaining = inFlightTurns.decrementAndGet();
-            if (remaining < 0) {
-                LOG.error("unbalanced in-flight turn counter: " + remaining + " — cleaning up");
-                inFlightTurns.set(0);
-            }
-            if (remaining <= 0) { // fail-open: UI must never stay stuck
-                monitorRef.set(new NullProgressMonitor());
-                lockWhileWorking(false);
-                actionsBar.updateCompact(
-                        aiService.getActiveAgent().getMemory().getTotalTokenUsed(),
-                        aiService.getConfig().getAutoCompactAfter());
-
-                // R-CT-3: compact finished and the user queued a message during it — submit the
-                // follow-up in THIS runnable (same as the unlock, no window). Active agent only:
-                // a slave compact's queue is not fed by the UI; an agent switch mid-compact leaves
-                // the queue to the old agent's next turn. Fires on every job end (D6) — ex is irrelevant.
-                if (compactedAgent != null
-                        && compactedAgent == aiService.getActiveAgent()
-                        && compactedAgent.getQueuedMessageCount() > 0) {
-                    LOG.info("compact follow-up: agent=" + agentName
-                            + " queued=" + compactedAgent.getQueuedMessageCount());
-                    submitAiJob(null);
-                }
-
-                // Queue drain on abort is handled in core by AbstractAgent.handleAbortAndDrain() — ADR-0017
-                LOG.info("turn done: agent=" + agentName + " reset committed (in-flight " + (remaining + 1) + "->" + remaining + ")");
-            } else {
-                // a newer run owns lock + monitorRef — touch nothing
-                LOG.info("turn finally skipped (newer run in flight): agent=" + agentName + " in-flight " + (remaining + 1) + "->" + remaining);
-            }
-        });
-    }
-
-    private Exception handleChatException(Exception e) {
-        if (e == null) return null;
-        if (isCanceled()) return null;
-        if (ExceptionUtil.isCanceled(e)) return null;
-        if (ExceptionUtil.isRateLimit(e)) {
-            onChatResponse(new SimpleMessage(Type.PROBLEM, "API rate limit! " + e.getMessage()));
-            return null;
-        }
-        LOG.warn("Failed to call LLM " + aiService.getConfig(), e);
-        if (aiService.getConfig().isDebugMode()) {
-            aiService.getActiveAgent().getMemory().printMessages();
-        }
-        onChatResponse(new SimpleMessage(Type.PROBLEM, e.getMessage()));
-        return e;
-    }
-
-    private void onPinChange(boolean pinned) {
-        aiService.getUserContext().setProjectPinned(pinned);
-        if (!pinned && aiService.getUserContext().getSelectedResource() != null) {
-            var project = EclipseUtil.resolveProject(aiService.getUserContext().getSelectedResource());
-            if (project != null)  aiService.setProject(project);
-        }
-        statusLine.setPinned(pinned);
-        refreshStatusLine();
-    }
-
-    private void lockWhileWorking(boolean value) {
-        if (parent == null || parent.isDisposed()) return;
-        actionsBar.lockWhileWorking(value);
-        chatInput.isWorking(value);
-        headerBar.refreshRoster(); // reflect work start/end (esp. clear the 🟢 on end)
-        if (!value) chatHistory.hideLiveStatus();
-        if (!value && questionWidget != null && questionWidget.isVisible()) {
-            questionWidget.cancel();
-        }
-    }
-
-    private void showQuestion(String question, List<String> answers,
-            java.util.function.Consumer<String> onAnswer) {
-        EclipseUtil.runInUiThread(parent, () -> {
-            chatHistory.hideLiveStatus();
-            ((GridData) chatInput.getLayoutData()).exclude = true;
-            chatInput.setVisible(false);
-            ((GridData) questionWidget.getLayoutData()).exclude = false;
-            questionWidget.setVisible(true);
-            chatHistory.appendMessage(new SimpleMessage(Type.QUESTION, question));
-            questionWidget.showQuestion(answers, a -> {
-                chatHistory.appendMessage(new SimpleMessage(Type.USER, a));
-                onAnswer.accept(a);
-            });
-            inputBlock.layout(true, true);
-            inputBlock.getParent().layout(new Control[]{ inputBlock });
-            // The question message scrolled to the bottom before the widget grew — the layout
-            // shrunk the chat viewport since, so scroll again or the last lines are covered (R-UI1).
-            chatHistory.scrollToBottom();
-        });
-    }
-
-    private void hideQuestion() {
-        ((GridData) chatInput.getLayoutData()).exclude = false;
-        chatInput.setVisible(true);
-        ((GridData) questionWidget.getLayoutData()).exclude = true;
-        questionWidget.setVisible(false);
-        questionWidget.hideQuestion();
-        inputBlock.layout(true, true);
-        inputBlock.getParent().layout(new Control[]{ inputBlock });
-        // Restore live status — work is still in progress while user answered.
-        chatHistory.updateLiveResponseInUIThread("waiting for AI...", 0, null);
-    }
-
-    private void onSkillsToggle(boolean enabled) {
-        aiService.getSkillService().setEnabled(enabled);
-    }
-
-    private void onSkillMenuSelection(SkillMenuSelection selection) {
-        if (selection.isAllSkills) {
-            aiService.getSkillService().setAllSkillsEnabled(selection.enabled);
-        } else {
-            aiService.getSkillService().setSkillEnabled(selection.skillName, selection.enabled);
-        }
-        EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
-    }
-
-    private void onMicClick() {
-        if (!recording) {
-            recording = true;
-            chatInput.setRecording(true);
-            try {
-                VoiceConfig voice = VoicePreferenceInitializer.buildWithDefaults()
-                        .resolve(aiService.getConfig());
-                voiceService.startRecording(voice);
-            } catch (Exception e) {
-                recording = false;
-                chatInput.setRecording(false);
-                onChatResponse(new SimpleMessage(Type.PROBLEM, "Cannot open microphone: " + e.getMessage()));
-            }
-        } else {
-            recording = false;
-            chatInput.setRecording(false);
-            Job.create("Transcribing audio", monitor -> {
-                try {
-                    String text = voiceService.stopAndTranscribe();
-                    EclipseUtil.runInUiThread(parent, () -> {
-                        chatInput.setText(text);
-                        doSendMessage();
-                    });
-                } catch (Exception e) {
-                    return PeonConstants.errorStatus("Transcription failed", e);
-                }
-                return PeonConstants.okStatus("Transcription finished.");
-            }).schedule();
-        }
+        if (selectedObjects != null && selectedObjects.length > 0) onSelection(selectedObjects[0]);
     }
 }

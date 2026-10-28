@@ -7,7 +7,9 @@ package org.sterl.llmpeon.skill;
 public enum SkillSource {
 
     CONFIG(" [config]"),
-    PROJECT(" [project]");
+    PROJECT(" [project]"),
+    /** Built into a contributing bundle; lowest precedence (config/project override by name). */
+    EXTENSION(" [bundle]");
 
     private final String tag;
 

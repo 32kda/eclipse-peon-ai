@@ -1,0 +1,99 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?eclipse version="3.4"?>
+<schema targetNamespace="org.sterl.llmpeon" xmlns="http://www.w3.org/2001/XMLSchema">
+<annotation>
+  <appInfo>
+    <meta.schema plugin="org.sterl.llmpeon" id="mentionProvider" name="Peon mention provider"/>
+  </appInfo>
+  <documentation>
+    Contributes a trigger-based completion provider for the chat input — for example
+    '@' for workspace files or '#' for Java symbols.
+
+    The class must implement org.sterl.llmpeon.mention.MentionProvider (core module).
+    Built-in providers are registered first, so a contributed provider cannot override
+    an existing trigger; it can add a new one or extend the same one when the built-in
+    is disabled.
+  </documentation>
+</annotation>
+
+<element name="extension">
+  <annotation>
+    <appInfo>
+      <meta.element/>
+    </appInfo>
+  </annotation>
+  <complexType>
+    <choice minOccurs="1" maxOccurs="unbounded">
+      <element ref="provider"/>
+      <element ref="dialogProvider"/>
+    </choice>
+    <attribute name="point" type="string" use="required">
+      <annotation>
+        <documentation>
+          The extension point id: org.sterl.llmpeon.mentionProvider
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="id" type="string">
+      <annotation>
+        <documentation>
+          Optional unique id of the contribution.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable contribution name.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="provider">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.mention.MentionProvider.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="dialogProvider">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.parts.mention.DialogMentionProvider. Opens a native
+          picker (e.g. the JDT type dialog) instead of the inline completion popup.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+</schema>

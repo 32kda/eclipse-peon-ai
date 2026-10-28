@@ -49,6 +49,7 @@ import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 import org.sterl.llmpeon.scaffold.ReloadConfigTool;
+import org.sterl.llmpeon.skill.SkillDefinition;
 import org.sterl.llmpeon.skill.SkillService;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.docslinter.DocsIdTool;
@@ -60,6 +61,7 @@ import org.sterl.llmpeon.tool.tools.DiskGrepTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 import org.sterl.llmpeon.tool.tools.ShellTool;
 import org.sterl.llmpeon.tool.tools.SkillTool;
+import org.sterl.llmpeon.tool.tools.StartAgentTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -87,6 +89,54 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.setProject(project);
     }
     
+    @Test
+    public void extensionContributesJavaSymbolDialogProvider() {
+        // '# ' Java symbols come from the mentionProvider extension point (JDT type dialog)
+        assertTrue("javadoc '# type' dialog provider must be contributed",
+                aiService.getDialogMentionProviders().stream()
+                        .anyMatch(provider -> provider.trigger() == '#'));
+        // '@' files are the built-in inline provider
+        assertTrue("'@' inline provider must be available",
+                aiService.getMentionService().providerFor('@').isPresent());
+    }
+
+    @Test
+    public void contributesSpecialistsStartAgentAndCatalogs() {
+        // S3.2: focused specialists are contributed and delegatable
+        assertTrue(aiService.getAgents().stream().map(AiAgent::getName).toList()
+                .containsAll(List.of("Java Developer", "PDE Developer")));
+        assertNotNull("startAgent must be registered",
+                aiService.getSharedToolService().getExecutor(StartAgentTool.NAME));
+
+        var javaDev = aiService.getAgent("Java Developer").orElseThrow();
+        assertTrue(javaDev.isTool());
+        assertTrue("description is injected into the catalog",
+                javaDev.getDescription().contains("JDT"));
+        assertTrue("curated tools", javaDev.getTools().contains("eclipseRunJavaTests"));
+        assertFalse("no shell in the specialist", javaDev.getTools().contains("shell"));
+
+        // catalogs: descriptions only, never skill bodies. The active (non-tool) agent gets both;
+        // a specialist must not be told to delegate further.
+        aiService.getSkillService().setContributedSkills(List.of(
+                SkillDefinition.of("probe-skill", "probe description", "SECRET BODY")));
+        aiService.refreshStaticContext();
+
+        var staticContext = aiService.getActiveAgent().getStaticContext();
+        var skillCatalog = staticContext.stream()
+                .filter(item -> "Skill catalog".equals(item.label())).findFirst().orElseThrow();
+        var agentCatalog = staticContext.stream()
+                .filter(item -> "Agent catalog".equals(item.label())).findFirst().orElseThrow();
+
+        assertTrue(skillCatalog.render().contains("probe description"));
+        assertFalse("skill body stays out of the catalog",
+                skillCatalog.render().contains("SECRET BODY"));
+        assertTrue(agentCatalog.render().contains("Java Developer"));
+        assertTrue(agentCatalog.render().contains("JDT"));
+        assertFalse("specialists must not be told to delegate",
+                javaDev.getStaticContext().stream()
+                        .anyMatch(item -> "Agent catalog".equals(item.label())));
+    }
+
     @Test
     public void setProjectWiresGrepTool() throws Exception {
         var otherProject = ResourcesPlugin.getWorkspace().getRoot().getProject("aaa_other");
@@ -1115,11 +1165,15 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             svc.setProject(project);
             svc.setActiveAgent(AiPoAgent.NAME);
 
-            // THEN: Jon's static context is exactly Env (1 item) — WITHOUT the memory snapshot
+            // THEN: Jon's static context is Env + the catalogs — WITHOUT the memory snapshot
             var jon = svc.getActiveAgent();
             var ctx = jon.getStaticContext();
-            assertEquals(1, ctx.size());
-            assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
+            var env = ctx.stream()
+                    .filter(item -> "Static env info".equals(item.label()))
+                    .findFirst().orElseThrow();
+            assertContains(env.render(), "prefer eclipse*"); // Env
+            assertTrue("agent catalog is part of the static context",
+                    ctx.stream().anyMatch(item -> "Agent catalog".equals(item.label())));
 
             // AND: no memory snapshot and no file items in the static context
             var forbidden = List.of(memoryText, "docs/memory.md", "docs/index.md");

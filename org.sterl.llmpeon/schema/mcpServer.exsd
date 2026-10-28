@@ -1,0 +1,81 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?eclipse version="3.4"?>
+<schema targetNamespace="org.sterl.llmpeon" xmlns="http://www.w3.org/2001/XMLSchema">
+<annotation>
+  <appInfo>
+    <meta.schema plugin="org.sterl.llmpeon" id="mcpServer" name="Peon in-process MCP server"/>
+  </appInfo>
+  <documentation>
+    Contributes an in-process Java/Eclipse MCP server. The class implements
+    org.sterl.llmpeon.mcp.IMcpServer and has a no-arg constructor; its IMcpTool
+    implementations use the existing langchain4j @Tool/@P markup.
+
+    This is the counterpart to the external STDIO/HTTP MCP servers configured in
+    preferences: no process, no socket, tools run in the Eclipse JVM with workspace
+    access. Tools are registered as contributed tools and marked MCP in the UI.
+
+    IMcpServer.defaultEnabled() is false by default (opt-in): the tools are not in
+    the default agent tool list; an agent enables them via its tools: allowlist.
+    Set it to true only for broadly useful, cheap tools. Name collisions with
+    built-in tools are rejected. The server and its tools may implement
+    org.sterl.llmpeon.parts.ProjectAware to receive the active project.
+  </documentation>
+</annotation>
+
+<element name="extension">
+  <annotation>
+    <appInfo>
+      <meta.element/>
+    </appInfo>
+  </annotation>
+  <complexType>
+    <sequence>
+      <element ref="mcpServer" minOccurs="1" maxOccurs="unbounded"/>
+    </sequence>
+    <attribute name="point" type="string" use="required">
+      <annotation>
+        <documentation>
+          The extension point id: org.sterl.llmpeon.mcpServer
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="id" type="string">
+      <annotation>
+        <documentation>
+          Optional unique id of the contribution.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable contribution name.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="mcpServer">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.mcp.IMcpServer.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+</schema>

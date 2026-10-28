@@ -1,0 +1,76 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?eclipse version="3.4"?>
+<schema targetNamespace="org.sterl.llmpeon" xmlns="http://www.w3.org/2001/XMLSchema">
+<annotation>
+  <appInfo>
+    <meta.schema plugin="org.sterl.llmpeon" id="agent" name="Peon agent provider"/>
+  </appInfo>
+  <documentation>
+    Contributes agents without files. The provider returns AgentDefinition entries
+    (name, short description, prompt, tools allowlist, read-only, model/think,
+    handover, delegatable). Contributed agents are materialized as CustomAgent.
+
+    Contributed agents have lower priority than file agents and persistent built-ins:
+    a name collision keeps the file/built-in agent. They can be disabled by name.
+    The provider class must implement org.sterl.llmpeon.agent.AgentProvider and have
+    a no-arg constructor.
+  </documentation>
+</annotation>
+
+<element name="extension">
+  <annotation>
+    <appInfo>
+      <meta.element/>
+    </appInfo>
+  </annotation>
+  <complexType>
+    <sequence>
+      <element ref="agentProvider" minOccurs="1" maxOccurs="unbounded"/>
+    </sequence>
+    <attribute name="point" type="string" use="required">
+      <annotation>
+        <documentation>
+          The extension point id: org.sterl.llmpeon.agent
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="id" type="string">
+      <annotation>
+        <documentation>
+          Optional unique id of the contribution.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable contribution name.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="agentProvider">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.agent.AgentProvider.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+</schema>

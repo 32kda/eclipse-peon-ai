@@ -12,9 +12,12 @@ import org.sterl.llmpeon.compact.CompactConstants;
 import org.sterl.llmpeon.exception.ExceptionUtil;
 import org.sterl.llmpeon.mcp.McpServerConfig;
 import org.sterl.llmpeon.mcp.McpService;
+import org.sterl.llmpeon.mcp.McpToolGateway;
+import org.sterl.llmpeon.session.UserReminder;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
+import org.sterl.llmpeon.tool.model.SimpleMessage;
 import org.sterl.llmpeon.tool.model.ToSimpleMessage;
 import org.sterl.llmpeon.tool.tools.AbstractTool;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
@@ -46,6 +49,8 @@ public class ToolService {
 
     private static final int MAX_STUCK_ITERATIONS = 10;
     private final Map<String, SmartToolExecutor> toolExecutors = new ConcurrentHashMap<>();
+    /** Makes the check-and-register of tools atomic (built-in and contributed alike). */
+    private final Object toolRegistrationLock = new Object();
 
     /** Public: the compact stage-1 reduction references it as a named constant (ADR-0056.4). */
     public static final String COMPACT_HINT =
@@ -58,8 +63,7 @@ public class ToolService {
             Stop thinking and take action now: either call a tool, ask a clarifying question,
             or provide your answer directly.""";
 
-    private McpService mcpService;
-    private List<ToolSpecification> mcpToolSpecs = List.of();
+    private McpToolGateway mcpService;
 
     public ToolService() {
         this(true);
@@ -90,7 +94,12 @@ public class ToolService {
 
     /** Names of the currently connected MCP tools (empty when no MCP server is connected). */
     public List<String> mcpToolNames() {
-        return mcpToolSpecs.stream().map(ToolSpecification::name).toList();
+        return mcpToolSpecs().stream().map(ToolSpecification::name).toList();
+    }
+
+    private List<ToolSpecification> mcpToolSpecs() {
+        var service = mcpService;
+        return service == null ? List.of() : service.getToolSpecifications();
     }
 
     List<ToolSpecification> toolSpecifications(ToolLoopRequest req) {
@@ -100,10 +109,22 @@ public class ToolService {
                 .map(SmartToolExecutor::getSpec)
                 .forEach(result::add);
 
-        mcpToolSpecs.stream()
+        mcpToolSpecs().stream()
                 .filter(spec -> req.toolNameFilter.test(spec.name()))
+                .filter(spec -> req.getAgent() == null
+                        || req.getAgent().isMcpServerActive(mcpServerOf(spec.name())))
                 .forEach(result::add);
         return result;
+    }
+
+    private String mcpServerOf(String toolName) {
+        var service = mcpService;
+        return service == null ? null : service.toolServer(toolName);
+    }
+
+    /** Owning MCP server of a tool, or {@code null} for unknown/non-MCP tools (UI introspection). */
+    public String mcpServerForTool(String toolName) {
+        return mcpServerOf(toolName);
     }
 
     public SmartToolExecutor getExecutor(String toolName) {
@@ -184,7 +205,7 @@ public class ToolService {
                 req.monitor.onProblem("AI hangs - only thinking returned times: " + stuck);
                 if (stuck > MAX_STUCK_ITERATIONS) break;
                 if (stuck > MAX_STUCK_ITERATIONS - 2) addCompactHintIfNeeded(req, response, true);
-                else req.addMessage(new UserMessage(STUCK_MESSAGE));
+                else addReminder(req, STUCK_MESSAGE);
             }
         } while (shouldLoop && !req.monitor.isCanceled());
 
@@ -194,6 +215,15 @@ public class ToolService {
     private static boolean ranTool(ChatResponse response, String toolName) {
         return response.aiMessage().toolExecutionRequests().stream()
                 .anyMatch(tr -> toolName.equals(tr.name()));
+    }
+
+    /**
+     * Adds a programmatic reminder to the LLM context and shows it in the chat as a reminder
+     * (not as a user message). The model itself sees a normal {@code UserMessage}.
+     */
+    private static void addReminder(ToolLoopRequest req, String text) {
+        req.addMessage(UserReminder.create(text));
+        AiMonitor.nullSafety(req.monitor).onChatResponse(new SimpleMessage(SimpleMessage.Type.REMINDER, text));
     }
 
     private void addCompactHintIfNeeded(ToolLoopRequest req, ChatResponse response, boolean force) {
@@ -216,7 +246,7 @@ public class ToolService {
             final var msg = "Your context window is almost full and cannot be compacted. " +
                     "Stop calling tools now and give your best final answer with what you have so far.";
             if (!memory.containsMessage(msg)) {
-                req.addMessage(new UserMessage(msg));
+                addReminder(req, msg);
                 AiMonitor.nullSafety(req.monitor).onTool("Info for search agent added to return now a result, context full: " + memory.getTotalTokenUsed());
             }
         } else {
@@ -227,7 +257,7 @@ public class ToolService {
             // R-CC-10: the diagnosis rides on the onTool LOG line only — the UserMessage below must
             // stay clean (it becomes LLM context; the diagnosis is not for the model).
             AiMonitor.nullSafety(req.monitor).onTool("🗜 Compact hint for " + agentName + " added! " + used + memory.tokenDiagnosis());
-            req.addMessage(new UserMessage(COMPACT_HINT + System.lineSeparator() + used));
+            addReminder(req, COMPACT_HINT + System.lineSeparator() + used);
         }
     }
 
@@ -294,14 +324,17 @@ public class ToolService {
         var service = new McpService(servers);
         service.connect(); // throws on failure
         this.mcpService = service;
-        this.mcpToolSpecs = service.getToolSpecifications();
+    }
+
+    /** Uses a shared/pooled MCP gateway; the gateway owns its lease. */
+    public void setMcpGateway(McpToolGateway gateway) {
+        this.mcpService = gateway;
     }
 
     /** Disconnects the active MCP service and removes its tools from the tool loop. */
     public void disconnectMcp() {
-        this.mcpToolSpecs = List.of();
         if (mcpService != null) {
-            mcpService.disconnect();
+            mcpService.close();
             mcpService = null;
         }
     }
@@ -317,19 +350,63 @@ public class ToolService {
     
     public SmartToolExecutor replaceTool(SmartTool toolObject) {
         SmartToolExecutor result = null;
-        for (Method method : toolObject.getClass().getDeclaredMethods()) {
-            if (method.isAnnotationPresent(Tool.class)) {
-                var spec = ToolSpecifications.toolSpecificationFrom(method);
-                var old = toolExecutors.put(spec.name(), new SmartToolExecutor(toolObject, method, spec));
-                if (old != null) {
-                    result = old;
-                    log.info("replaced tool " + spec);
-                } else {
-                    log.debug("added tool   " + spec);
+        synchronized (toolRegistrationLock) {
+            for (Method method : toolObject.getClass().getDeclaredMethods()) {
+                if (method.isAnnotationPresent(Tool.class)) {
+                    var spec = ToolSpecifications.toolSpecificationFrom(method);
+                    var old = toolExecutors.put(spec.name(), new SmartToolExecutor(toolObject, method, spec, false));
+                    if (old != null) {
+                        result = old;
+                        log.info("replaced tool " + spec);
+                    } else {
+                        log.debug("added tool   " + spec);
+                    }
                 }
             }
         }
         return result;
+    }
+
+    /**
+     * Registers a bundle-contributed tool. Contributed tools are <b>opt-in</b> unless
+     * {@code defaultEnabled} is set: agents only see them when their {@code tools:} allowlist
+     * names them (or the contribution opts into the default list). A name collision is rejected
+     * atomically — a contribution must never shadow a built-in.
+     */
+    public void addContributedTool(SmartTool toolObject) {
+        addContributedTool(toolObject, false, false);
+    }
+
+    public void addContributedTool(SmartTool toolObject, boolean defaultEnabled) {
+        addContributedTool(toolObject, defaultEnabled, false);
+    }
+
+    public void addContributedTool(SmartTool toolObject, boolean defaultEnabled, boolean mcp) {
+        var methods = new ArrayList<Method>();
+        var specs = new ArrayList<ToolSpecification>();
+        for (Method method : toolObject.getClass().getDeclaredMethods()) {
+            if (method.isAnnotationPresent(Tool.class)) {
+                methods.add(method);
+                specs.add(ToolSpecifications.toolSpecificationFrom(method));
+            }
+        }
+        synchronized (toolRegistrationLock) {
+            for (var spec : specs) {
+                if (toolExecutors.containsKey(spec.name())) {
+                    throw new RuntimeException("Contributed tool '" + spec.name()
+                            + "' collides with an existing tool — contribution skipped");
+                }
+            }
+            for (int i = 0; i < methods.size(); i++) {
+                var spec = specs.get(i);
+                var old = toolExecutors.putIfAbsent(spec.name(), new SmartToolExecutor(
+                        toolObject, methods.get(i), spec, true, defaultEnabled, mcp));
+                if (old != null) {
+                    throw new RuntimeException("Contributed tool '" + spec.name()
+                            + "' collides with an existing tool — contribution skipped");
+                }
+            }
+        }
     }
 
     /** Removes all tools registered from the given tool object. */

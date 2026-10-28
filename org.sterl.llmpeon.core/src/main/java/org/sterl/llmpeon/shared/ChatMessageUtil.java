@@ -104,7 +104,13 @@ public class ChatMessageUtil {
         List<Content> data = new LinkedList<>();
         data.addAll(toContent(m1));
         data.addAll(toContent(m2));
-        return UserMessage.from(data);
+        if (m1.attributes().isEmpty() && m2.attributes().isEmpty()) {
+            return UserMessage.from(data);
+        }
+        var attributes = new java.util.LinkedHashMap<String, Object>();
+        attributes.putAll(m1.attributes());
+        attributes.putAll(m2.attributes());
+        return UserMessage.builder().contents(data).attributes(attributes).build();
     }
 
     private static List<Content> toContent(UserMessage message) {

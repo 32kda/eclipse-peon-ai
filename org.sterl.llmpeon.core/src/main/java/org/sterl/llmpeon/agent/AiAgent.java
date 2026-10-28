@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
+import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
@@ -18,6 +19,14 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 public interface AiAgent {
     String getName();
     String getSystemPrompt();
+
+    /**
+     * Short description shown in the agent catalog (and used by the model to pick a sub-agent).
+     * {@code null} = no description; the catalog falls back to the name.
+     */
+    default String getDescription() {
+        return null;
+    }
 
     @Nullable
     ChatResponse call(String message, AiMonitor monitor);
@@ -34,6 +43,11 @@ public interface AiAgent {
     List<ChatMessage> buildStaticMessages(AiMonitor monitor);
 
     ThreadSafeMemory getMemory();
+
+    /** Per-agent model/provider/think configuration; {@code null} = no own config. */
+    default AgentConfig getConfig() {
+        return null;
+    }
     
     int tokenContextUsedInPercent();
     
@@ -138,11 +152,36 @@ public interface AiAgent {
     }
 
     /**
+     * MCP server allowlist for this agent. {@code null} = all workspace-enabled servers;
+     * an empty list = no MCP servers; otherwise only the named servers.
+     */
+    default List<String> getMcpServers() {
+        return null;
+    }
+
+    /** Whether the named MCP server is in this agent's scope. */
+    default boolean isMcpServerActive(String serverName) {
+        if (serverName == null) return true;
+        var allowed = getMcpServers();
+        return allowed == null || allowed.stream()
+                .anyMatch(name -> serverName.equalsIgnoreCase(name));
+    }
+
+    /**
      * Whether the given built-in tool is offered to the LLM for this agent. Reflects the agent's
      * full tool filter (allowlist <em>and</em> the read-only "no edit tools" rule), so it matches
      * exactly what the agent sends at runtime. For UI introspection (e.g. the tool activity popup).
      */
     boolean isToolActive(SmartToolExecutor exec);
+
+    /**
+     * Whether the given tool name is offered to this agent by its name allowlist (the same filter
+     * MCP tools use). For gating hints/local catalogs so the model is never pointed at a tool the
+     * agent cannot call.
+     */
+    default boolean isToolNameActive(String toolName) {
+        return true;
+    }
 
     /**
      * Whether the given MCP tool name is offered to the LLM for this agent (name allowlist).

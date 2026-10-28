@@ -3,6 +3,7 @@ package org.sterl.llmpeon.tool.model;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.sterl.llmpeon.session.UserReminder;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.model.SimpleMessage.Type;
 
@@ -22,7 +23,7 @@ public enum ToSimpleMessage{
 
         String text = "";
         if (msg instanceof UserMessage um) {
-            role = Type.USER;
+            role = UserReminder.isReminder(um) ? Type.REMINDER : Type.USER;
             if (um.hasSingleText()) text = um.singleText();
             else {
                 var tc = um.contents().stream().filter(t -> t instanceof TextContent).toList();

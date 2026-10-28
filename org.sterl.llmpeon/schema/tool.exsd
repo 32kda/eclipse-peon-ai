@@ -1,0 +1,84 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?eclipse version="3.4"?>
+<schema targetNamespace="org.sterl.llmpeon" xmlns="http://www.w3.org/2001/XMLSchema">
+<annotation>
+  <appInfo>
+    <meta.schema plugin="org.sterl.llmpeon" id="tool" name="Peon tool provider"/>
+  </appInfo>
+  <documentation>
+    Contributes tools. The provider returns SmartTool instances with @Tool methods.
+
+    Contributed tools are OPT-IN: an agent sees them only when its tools: allowlist
+    names them (an absent tools: field enables the built-in tool set only). A tool
+    name collision with a built-in tool is rejected. The provider class must implement
+    org.sterl.llmpeon.tool.ToolProvider and have a no-arg constructor; it and its tools
+    may implement org.sterl.llmpeon.parts.ProjectAware to receive the active project.
+  </documentation>
+</annotation>
+
+<element name="extension">
+  <annotation>
+    <appInfo>
+      <meta.element/>
+    </appInfo>
+  </annotation>
+  <complexType>
+    <sequence>
+      <element ref="toolProvider" minOccurs="1" maxOccurs="unbounded"/>
+    </sequence>
+    <attribute name="point" type="string" use="required">
+      <annotation>
+        <documentation>
+          The extension point id: org.sterl.llmpeon.tool
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="id" type="string">
+      <annotation>
+        <documentation>
+          Optional unique id of the contribution.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable contribution name.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="toolProvider">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.tool.ToolProvider.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="defaultEnabled" type="boolean" use="optional" default="false">
+      <annotation>
+        <documentation>
+          true = include the contributed tools in the default agent tool list.
+          false (default) = opt-in only: an agent must name the tool in its tools:
+          allowlist. Keep this false unless the tools are broadly useful and cheap.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+</schema>

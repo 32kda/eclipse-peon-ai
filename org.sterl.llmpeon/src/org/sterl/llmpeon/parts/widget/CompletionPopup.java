@@ -1,7 +1,8 @@
 package org.sterl.llmpeon.parts.widget;
 
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
@@ -18,42 +19,58 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
-import org.sterl.llmpeon.prompt.model.SimplePromptFile;
-import org.sterl.llmpeon.skill.SkillPromptFile;
-import org.sterl.llmpeon.skill.SkillSource;
 
 /**
- * Lightweight popup that lists slash-commands matching the current prefix.
+ * Lightweight, typed completion popup shared by every trigger ({@code /} commands, {@code @}
+ * files, later {@code #} symbols).
  *
  * <p>The popup is a borderless on-top {@link Shell} anchored to the chat input. It never takes
  * focus; the host widget keeps focus on its text control and forwards arrow / Enter / Escape
  * keys via {@link #moveSelection(int)}, {@link #commitSelection()} and {@link #hide()}.</p>
+ *
+ * <p>The caller filters and ranks the items (see {@code MentionFilter}); this class only renders,
+ * navigates and reports the selected value. That keeps command-specific and file-specific rules
+ * out of the widget.</p>
  */
-public class SlashMenuPopup {
+public final class CompletionPopup<T> {
 
     private static final int NAME_COL_WIDTH = 250;
-    
+    /** Both columns keep a positive width — shrink the name column instead of hiding the detail. */
+    private static final int MIN_NAME_COL_WIDTH = 120;
+    private static final int MIN_DETAIL_COL_WIDTH = 40;
+    /** Small gap after the columns (matches the old hard-coded 4px border allowance). */
+    private static final int COLUMN_GAP = 4;
+
     /** Maximum rows shown without scrolling. */
     private static final int MAX_VISIBLE_ROWS = 8;
-    /** Minimum popup width in pixels. */
+    /** Minimum popup width in pixels — must stay above both column minima plus the gap. */
     private static final int MIN_WIDTH = 240;
     /** Maximum popup width in pixels. */
     private static final int MAX_WIDTH = 520;
 
+    /** One row: bold label, muted detail, and the value handed back on selection. */
+    public record Item<T>(String label, String detail, T value) {
+        public Item {
+            Objects.requireNonNull(label, "label");
+        }
+
+        public static <T> Item<T> of(String label, T value) {
+            return new Item<>(label, null, value);
+        }
+    }
+
     private final Composite anchor;
-    private final Consumer<SimplePromptFile> onSelect;
+    private final Consumer<T> onSelect;
     private final Listener anchorShellMoveListener;
     private final Shell anchorShell;
 
     private Shell popup;
     private Table table;
-    /** Larger, bold font for the command name column. Owned by this popup, disposed with it. */
+    /** Larger, bold font for the label column. Owned by this popup, disposed with it. */
     private Font nameFont;
-    private List<SimplePromptFile> filtered = List.of();
-    private List<SimplePromptFile> source = List.of();
-    private String currentPrefix = "";
+    private List<Item<T>> filtered = List.of();
 
-    public SlashMenuPopup(Composite anchor, Consumer<SimplePromptFile> onSelect) {
+    public CompletionPopup(Composite anchor, Consumer<T> onSelect) {
         this.anchor = anchor;
         this.onSelect = onSelect;
         this.anchorShell = anchor.getShell();
@@ -77,39 +94,21 @@ public class SlashMenuPopup {
     }
 
     /**
-     * Shows or refreshes the popup with the given commands filtered by {@code prefix}.
-     * If no commands match, the popup is hidden.
+     * Shows (or refreshes) the popup with the given, already filtered items.
+     * Hides when the list is empty.
      *
-     * @param commands     full list of available commands
-     * @param prefix       prefix already typed after the slash, may be empty
      * @param anchorScreen anchor position in display coordinates (typically the caret location)
      */
-    public void show(List<SimplePromptFile> commands, String prefix, Point anchorScreen) {
-        this.source = commands == null ? List.of() : commands;
-        this.currentPrefix = prefix == null ? "" : prefix;
-        var matches = filter(this.source, this.currentPrefix);
-        if (matches.isEmpty()) {
+    public void show(List<Item<T>> items, Point anchorScreen) {
+        if (items == null || items.isEmpty()) {
             hide();
             return;
         }
-        this.filtered = matches;
+        this.filtered = new ArrayList<>(items);
         ensurePopup();
         rebuildItems();
         layoutAt(anchorScreen);
         popup.setVisible(true);
-    }
-
-    /** Updates the prefix filter while the popup is visible. */
-    public void updatePrefix(String prefix) {
-        this.currentPrefix = prefix == null ? "" : prefix;
-        if (popup == null || popup.isDisposed()) return;
-        var matches = filter(source, currentPrefix);
-        if (matches.isEmpty()) {
-            hide();
-            return;
-        }
-        this.filtered = matches;
-        rebuildItems();
     }
 
     /** Moves selection by {@code delta} rows; wraps at boundaries. */
@@ -123,14 +122,14 @@ public class SlashMenuPopup {
         table.showSelection();
     }
 
-    /** Triggers the consumer with the currently selected command, then hides the popup. */
+    /** Triggers the consumer with the currently selected item, then hides the popup. */
     public boolean commitSelection() {
         if (!isOpen() || filtered.isEmpty()) return false;
         int idx = table.getSelectionIndex();
         if (idx < 0) idx = 0;
         var selected = filtered.get(idx);
         hide();
-        onSelect.accept(selected);
+        onSelect.accept(selected.value());
         return true;
     }
 
@@ -139,7 +138,9 @@ public class SlashMenuPopup {
             popup.setVisible(false);
             popup.dispose();
         }
-        if (nameFont != null && !nameFont.isDisposed()) nameFont.dispose();
+        if (nameFont != null && !nameFont.isDisposed()) {
+            nameFont.dispose();
+        }
         nameFont = null;
         popup = null;
         table = null;
@@ -147,7 +148,7 @@ public class SlashMenuPopup {
     }
 
     private void ensurePopup() {
-        if (popup != null && !popup.isDisposed()) return; 
+        if (popup != null && !popup.isDisposed()) return;
 
         popup = new Shell(anchorShell, SWT.NO_TRIM | SWT.ON_TOP | SWT.TOOL);
         popup.setLayout(new FillLayout());
@@ -156,7 +157,7 @@ public class SlashMenuPopup {
         table.setHeaderVisible(false);
         table.setLinesVisible(false);
 
-        // Name should stand out over the short COMMAND/SKILL tag: derive a larger, bold font.
+        // Label should stand out over the short COMMAND/SKILL/path tag: derive a larger, bold font.
         var nameData = table.getFont().getFontData();
         for (var fd : nameData) {
             fd.setHeight(fd.getHeight() + 1);
@@ -167,8 +168,8 @@ public class SlashMenuPopup {
         var colName = new TableColumn(table, SWT.LEFT);
         colName.setWidth(NAME_COL_WIDTH);
 
-        var colDesc = new TableColumn(table, SWT.LEFT);
-        colDesc.setWidth(MAX_WIDTH - 114);
+        var colDetail = new TableColumn(table, SWT.LEFT);
+        colDetail.setWidth(MAX_WIDTH - 114);
 
         table.addListener(SWT.MouseDoubleClick, e -> commitSelection());
         table.addListener(SWT.DefaultSelection, e -> commitSelection());
@@ -183,18 +184,13 @@ public class SlashMenuPopup {
 
     private void rebuildItems() {
         table.removeAll();
-        for (var cmd : filtered) {
-            var item = new TableItem(table, SWT.NONE);
-            // R9: project skills carry the source suffix in autocomplete (the name filter stays suffix-free, R13)
-            var label = "/" + cmd.getName();
-            if (cmd instanceof SkillPromptFile skill && skill.getSource() == SkillSource.PROJECT) {
-                label += " [project]";
-            }
-            item.setText(0, label);
-            if (nameFont != null) item.setFont(0, nameFont);
-            item.setText(1, cmd instanceof SkillPromptFile ? "SKILL" : "COMMAND");
-            // mute the short type tag so the name stands out:
-            item.setForeground(1, table.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+        for (var item : filtered) {
+            var row = new TableItem(table, SWT.NONE);
+            row.setText(0, item.label());
+            if (nameFont != null) row.setFont(0, nameFont);
+            row.setText(1, item.detail() == null ? "" : item.detail());
+            // mute the short detail so the label stands out:
+            row.setForeground(1, table.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
         }
         if (!filtered.isEmpty()) table.setSelection(0);
     }
@@ -206,8 +202,12 @@ public class SlashMenuPopup {
         int height = rowHeight * rows + 6;
 
         int width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, anchor.getSize().x));
-        table.getColumn(0).setWidth(NAME_COL_WIDTH);
-        table.getColumn(1).setWidth(width - NAME_COL_WIDTH - 4);
+        // Share the available width: the detail column gets its minimum first, the name column
+        // may shrink but never disappears (a zero-width column is as broken as a negative one).
+        int available = Math.max(MIN_NAME_COL_WIDTH + MIN_DETAIL_COL_WIDTH, width - COLUMN_GAP);
+        int nameWidth = Math.min(NAME_COL_WIDTH, available - MIN_DETAIL_COL_WIDTH);
+        table.getColumn(0).setWidth(nameWidth);
+        table.getColumn(1).setWidth(available - nameWidth);
 
         var bounds = new Rectangle(0, 0, width, height);
         if (anchorScreen != null) {
@@ -225,14 +225,6 @@ public class SlashMenuPopup {
         popup.setBounds(bounds);
     }
 
-    private static List<SimplePromptFile> filter(List<SimplePromptFile> source, String prefix) {
-        if (prefix == null || prefix.isEmpty()) return source;
-        var lower = prefix.toLowerCase(Locale.ROOT);
-        return source.stream()
-                .filter(c -> c.getName().toLowerCase(Locale.ROOT).startsWith(lower))
-                .toList();
-    }
-
     /** Detach the anchor-shell listeners and dispose the popup if alive. */
     public void dispose() {
         if (!anchorShell.isDisposed()) {
@@ -242,5 +234,7 @@ public class SlashMenuPopup {
         hide();
     }
 
-    Control getPopupShellForTests() { return popup; }
+    Control getPopupShellForTests() {
+        return popup;
+    }
 }

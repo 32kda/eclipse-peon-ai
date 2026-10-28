@@ -9,5 +9,6 @@ public record SimpleMessage(Type role, String message) {
         THINK,
         QUESTION,
         DIFF,
+        REMINDER,
     }
 }

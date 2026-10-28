@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.ThinkResolver;
+import org.sterl.llmpeon.memory.AgentHistoryStore;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.prompt.PromptLoader;
@@ -16,6 +17,7 @@ import org.sterl.llmpeon.prompt.model.SimplePromptFile;
 import org.sterl.llmpeon.tool.ToolPolicy;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
+import org.sterl.llmpeon.tool.tools.StartAgentTool;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -55,9 +57,12 @@ public class CustomAgent extends AbstractAgent {
     public static final String INCLUDE_DEFAULT = "include-default";
     public static final String TEMPERATURE = "temperature";
     public static final String TOOLS = "tools";
+    public static final String MCP_SERVERS = "mcp-servers";
     public static final String READ_ONLY = "read-only";
     /** if an agent has a handover it gets the -> handover to button */
     public static final String HANDOVER = "handover";
+    /** Marks the agent as a delegatable sub-agent (catalog + {@code startAgent}). */
+    public static final String AS_TOOL = "as-tool";
 
     @Getter @Setter
     private volatile SimplePromptFile promptFile;
@@ -73,8 +78,15 @@ public class CustomAgent extends AbstractAgent {
             ConfiguredChatModel configuredModel,
             ToolService toolService,
             Path historyStateDir) {
-        super(configuredModel, toolService,
-                historyStateDir == null ? new ThreadSafeMemory() : new ThreadSafeMemory(new FileAgentHistoryStore(historyFile(historyStateDir, promptFile.getName()))));
+        this(promptFile, configuredModel, toolService, historyStateDir == null ? null
+                : new FileAgentHistoryStore(historyFile(historyStateDir, promptFile.getName())));
+    }
+
+    public CustomAgent(SimplePromptFile promptFile,
+            ConfiguredChatModel configuredModel,
+            ToolService toolService,
+            AgentHistoryStore historyStore) {
+        super(configuredModel, toolService, new ThreadSafeMemory(historyStore));
         this.promptFile = promptFile;
     }
 
@@ -135,6 +147,16 @@ public class CustomAgent extends AbstractAgent {
     @Override
     public String getName() {
         return promptFile.getName();
+    }
+
+    @Override
+    public String getDescription() {
+        return promptFile.getDescription();
+    }
+
+    @Override
+    public boolean isTool() {
+        return promptFile.isTrue(AS_TOOL);
     }
 
     @Override
@@ -199,14 +221,28 @@ public class CustomAgent extends AbstractAgent {
     public List<String> getTools() {
         return promptFile.get(TOOLS);
     }
+
+    @Override
+    public List<String> getMcpServers() {
+        return promptFile.get(MCP_SERVERS);
+    }
     public void setTools(List<String> values) {
         this.promptFile.set(TOOLS, values);
     }
 
     @Override
     protected Predicate<SmartToolExecutor> getToolFilter() {
-        return exec -> allowed(exec.getSpec().name())
-                && (!isReadOnly() || !exec.getTool().isEditTool());
+        var allowlist = PromptYmlParser.toolAllowlist(getTools());
+        return exec -> {
+            // absent tools: = built-ins plus contributed tools that opted into the default list
+            boolean nameAllowed = allowlist == null
+                    ? (!exec.isContributed() || exec.isDefaultEnabled())
+                    : ToolPolicy.enables(allowlist, exec.getSpec().name());
+            return nameAllowed
+                    && (!isReadOnly() || !exec.getTool().isEditTool())
+                    // a sub-agent must not start further sub-agents (no recursion, no tool pollution)
+                    && !(isTool() && exec.getTool() instanceof StartAgentTool);
+        };
     }
 
     @Override

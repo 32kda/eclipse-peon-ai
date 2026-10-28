@@ -10,7 +10,7 @@ public interface SmartTool {
      * Plan agents should only receive tools where this returns false.
      */
     default boolean isEditTool() { return false; }
-    
+
     /**
      * Adds a Monitor for the observation of the tool
      */

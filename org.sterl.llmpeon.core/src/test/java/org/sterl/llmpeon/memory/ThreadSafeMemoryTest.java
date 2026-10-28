@@ -62,6 +62,18 @@ class ThreadSafeMemoryTest extends AbstractMemoryFileTest {
     
     
     @Test
+    void reminderIsNotJoinedWithTheNextUserMessage() {
+        var subject = new ThreadSafeMemory();
+        subject.add(UserMessage.from("u1"));
+        subject.add(org.sterl.llmpeon.session.UserReminder.create("guardrail"));
+        subject.add(UserMessage.from("u2"));
+
+        assertThat(subject.size()).isEqualTo(3);
+        assertThat(org.sterl.llmpeon.session.UserReminder.isReminder(subject.get(1))).isTrue();
+        assertThat(subject.messageFlow()).isEqualTo("USER->USER->USER");
+    }
+
+    @Test
     void test_trailing_tool_result() {
         // GIVEN
         var subject = new ThreadSafeMemory();

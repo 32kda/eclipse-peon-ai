@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.core.runtime.jobs.Job;
 import org.sterl.llmpeon.mcp.McpServerConfig;
+import org.sterl.llmpeon.mcp.McpToolGateway;
 import org.sterl.llmpeon.parts.PeonConstants;
 import org.sterl.llmpeon.tool.ToolService;
 
@@ -18,6 +19,10 @@ public class McpConnectionService {
 
     private final ToolService toolService;
     private final Consumer<Boolean> onStateChange;
+    /** Non-null when this view uses the workspace-shared connection pool. */
+    private final McpConnectionManager manager;
+    private McpToolGateway lease;
+    private final Consumer<Boolean> managerListener;
 
     /** Last applied MCP state (server list + effective enabled flag). UI-thread confined. */
     private volatile McpApplied lastApplied;
@@ -36,8 +41,16 @@ public class McpConnectionService {
      *                      {@code false} when disconnected or on failure
      */
     public McpConnectionService(ToolService toolService, Consumer<Boolean> onStateChange) {
+        this(toolService, onStateChange, null);
+    }
+
+    public McpConnectionService(ToolService toolService, Consumer<Boolean> onStateChange,
+            McpConnectionManager manager) {
         this.toolService = toolService;
         this.onStateChange = onStateChange;
+        this.manager = manager;
+        this.managerListener = connected -> onStateChange.accept(connected);
+        if (manager != null) manager.addListener(managerListener);
     }
 
     /**
@@ -45,6 +58,11 @@ public class McpConnectionService {
      * Should be called whenever the preference page is saved.
      */
     public void applyConfig() {
+        if (manager != null) {
+            manager.applyConfig();
+            syncLease();
+            return;
+        }
         var desired = desiredState();
         if (desired.equals(lastApplied)) return;   // R-MCP1b: unchanged config → no reconnect
         lastApplied = desired;
@@ -60,6 +78,11 @@ public class McpConnectionService {
      * Called by the MCP toggle button.
      */
     public void toggle(boolean enabled) {
+        if (manager != null) {
+            manager.toggle(enabled);
+            syncLease();
+            return;
+        }
         McpPreferenceInitializer.setMcpEnabled(enabled);
         var desired = desiredState();
         lastApplied = desired;
@@ -70,8 +93,48 @@ public class McpConnectionService {
         }
     }
 
+    private void syncLease() {
+        if (manager == null) return;
+        if (manager.isEnabled()) {
+            ensureLease();
+            manager.ensureConnected();
+        } else {
+            releaseLease();
+        }
+        onStateChange.accept(manager.isConnected());
+    }
+
+    private void ensureLease() {
+        if (lease == null) {
+            lease = manager.acquire();
+            toolService.setMcpGateway(lease);
+        }
+    }
+
+    private void releaseLease() {
+        if (lease != null) {
+            lease.close();
+            lease = null;
+        }
+        toolService.disconnectMcp();
+    }
+
+    /** Releases the lease/listener; safe to call more than once. */
+    public void dispose() {
+        if (manager != null) {
+            manager.removeListener(managerListener);
+            releaseLease();
+        } else {
+            disconnect();
+        }
+    }
+
     /** Connects to all configured MCP servers in a background Job. */
     public void connect() {
+        if (manager != null) {
+            syncLease();
+            return;
+        }
         Job.create("Connecting MCP servers", monitor -> {
             final AtomicBoolean connected = new AtomicBoolean(false);
             try {
@@ -93,6 +156,10 @@ public class McpConnectionService {
 
     /** Synchronously disconnects all MCP servers and removes their tools. */
     public void disconnect() {
+        if (manager != null) {
+            releaseLease();
+            return;
+        }
         toolService.disconnectMcp();
     }
 

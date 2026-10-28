@@ -12,6 +12,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import org.jspecify.annotations.Nullable;
+import org.sterl.llmpeon.shared.StringUtil;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Composes the skill components (ADR-0042) into one effective view: the
@@ -28,13 +31,19 @@ import org.jspecify.annotations.Nullable;
  * (kept for the existing config-dir callers); {@link #setProjectSkillsDir(Path)}
  * replaces only the project component; {@link #refreshAll()} refreshes every component.</p>
  */
+@Slf4j
 public class SkillService {
 
     /** Project-local skills root, relative to the project disk path (ADR-0042). */
     public static final String PROJECT_SKILLS_DIR = ".agents/skills";
 
+    /** Catalog cap — descriptions are cheap, but a runaway bundle must stay honest. */
+    private static final int MAX_CATALOG_ENTRIES = 100;
+
     private volatile SkillComponent configComponent = new SkillComponent(SkillSource.CONFIG);
     private volatile SkillComponent projectComponent = new SkillComponent(SkillSource.PROJECT);
+    /** Bundle-contributed skills; lowest precedence (config/project override by name). */
+    private volatile Map<String, SkillPromptFile> contributed = Map.of();
 
     private final Map<String, Boolean> enabledByName = new ConcurrentHashMap<>();
     private volatile boolean enabled = true;
@@ -92,9 +101,10 @@ public class SkillService {
         projectComponent.refresh();
     }
 
-    /** Effective view: config first, project overrides by lowercase name. */
+    /** Effective view: bundle contributions first, config overrides, project wins on name. */
     private Map<String, SkillPromptFile> effectiveView() {
-        var merged = new LinkedHashMap<String, SkillPromptFile>(configComponent.skills());
+        var merged = new LinkedHashMap<String, SkillPromptFile>(contributed);
+        merged.putAll(configComponent.skills());
         merged.putAll(projectComponent.skills());
         return merged;
     }
@@ -170,6 +180,51 @@ public class SkillService {
 
     public boolean hasSkills() {
         return enabled && !effectiveView().isEmpty();
+    }
+
+    /**
+     * Replaces the bundle-contributed skills. They have the lowest precedence: a config or project
+     * skill with the same lowercase name wins. The enabled state stays name-keyed and survives.
+     */
+    public void setContributedSkills(List<SkillDefinition> definitions) {
+        var map = new LinkedHashMap<String, SkillPromptFile>();
+        if (definitions != null) {
+            for (var definition : definitions) {
+                if (definition == null) continue;
+                var key = definition.name().toLowerCase(Locale.ROOT);
+                if (map.put(key, definition.toPromptFile()) != null) {
+                    log.warn("Contributed skill name collision: '{}' — last one kept", definition.name());
+                }
+            }
+        }
+        this.contributed = Map.copyOf(map);
+    }
+
+    /**
+     * Prompt catalog: enabled skills with their short description (no bodies). Injected into the
+     * agent's static context so the model can pick one before calling {@code skillRead}.
+     */
+    public String catalog() {
+        var skills = getSkills();
+        if (skills.isEmpty()) return "";
+
+        var result = new StringBuilder();
+        int max = Math.min(skills.size(), MAX_CATALOG_ENTRIES);
+        for (int i = 0; i < max; i++) {
+            var skill = skills.get(i);
+            result.append("- ")
+                    .append(skill.getName())
+                    .append(skill.getSource().tag())
+                    .append(": ")
+                    .append(StringUtil.hasValue(skill.getDescription())
+                            ? skill.getDescription() : "(no description)")
+                    .append(System.lineSeparator());
+        }
+        if (skills.size() > max) {
+            result.append("... showing ").append(max).append(" of ").append(skills.size())
+                    .append(" skills").append(System.lineSeparator());
+        }
+        return result.toString().stripTrailing();
     }
 
     /**

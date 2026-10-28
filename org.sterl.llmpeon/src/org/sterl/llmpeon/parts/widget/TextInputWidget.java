@@ -298,6 +298,21 @@ public class TextInputWidget extends Composite {
         styledText.setCaretOffset(clamped);
     }
 
+    /** Current caret offset, clamped to the current text length. */
+    public int getCaretOffset() {
+        if (styledText.isDisposed()) return 0;
+        return Math.max(0, Math.min(styledText.getCaretOffset(), styledText.getCharCount()));
+    }
+
+    /** Replaces a text range — used by completion popups to swap the active token. */
+    public void replaceTextRange(int start, int length, String text) {
+        if (styledText.isDisposed()) return;
+        int count = styledText.getCharCount();
+        int from = Math.max(0, Math.min(start, count));
+        int to = Math.max(from, Math.min(from + Math.max(0, length), count));
+        styledText.replaceTextRange(from, to - from, text != null ? text : "");
+    }
+
     public static record UndoRedoStack (int cursorPosition, String newText, String replacedText, int eventLength, int type) {
         public static final int DELETE = 0;
         public static final int INSERT = 1;

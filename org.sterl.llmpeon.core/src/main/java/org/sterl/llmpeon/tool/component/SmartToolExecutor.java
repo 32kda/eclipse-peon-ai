@@ -15,8 +15,23 @@ public class SmartToolExecutor {
     private final DefaultToolExecutor executor;
     private final SmartTool tool;
     private final ToolSpecification spec;
+    /** Bundle-contributed tool — opt-in unless {@link #defaultEnabled}. */
+    private final boolean contributed;
+    /** Contributed tool explicitly included in the default agent tool list. */
+    private final boolean defaultEnabled;
+    /** Comes from an MCP server (external or in-process). */
+    private final boolean mcp;
 
     public SmartToolExecutor(SmartTool tool, Method method, ToolSpecification spec) {
+        this(tool, method, spec, false, false, false);
+    }
+
+    public SmartToolExecutor(SmartTool tool, Method method, ToolSpecification spec, boolean contributed) {
+        this(tool, method, spec, contributed, false, false);
+    }
+
+    public SmartToolExecutor(SmartTool tool, Method method, ToolSpecification spec,
+            boolean contributed, boolean defaultEnabled, boolean mcp) {
         this.executor = DefaultToolExecutor.builder()
                 .object(tool)
                 .originalMethod(method)
@@ -26,12 +41,27 @@ public class SmartToolExecutor {
 
         this.tool = tool;
         this.spec = spec;
+        this.contributed = contributed;
+        this.defaultEnabled = defaultEnabled;
+        this.mcp = mcp;
     }
     public SmartTool getTool() {
         return tool;
     }
     public ToolSpecification getSpec() {
         return spec;
+    }
+
+    public boolean isContributed() {
+        return contributed;
+    }
+
+    public boolean isDefaultEnabled() {
+        return defaultEnabled;
+    }
+
+    public boolean isMcp() {
+        return mcp;
     }
     
     public String run(ToolExecutionRequest request, ToolLoopRequest req) {

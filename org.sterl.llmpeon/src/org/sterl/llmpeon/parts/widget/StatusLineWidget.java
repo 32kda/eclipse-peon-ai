@@ -1,9 +1,6 @@
 package org.sterl.llmpeon.parts.widget;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.swt.SWT;
@@ -14,38 +11,23 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Menu;
-import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.ui.ISharedImages;
-import org.eclipse.ui.PlatformUI;
 import org.sterl.llmpeon.parts.shared.EclipseUiUtil;
 import org.sterl.llmpeon.parts.shared.ImageUtil;
-import org.sterl.llmpeon.skill.SkillPromptFile;
-import org.sterl.llmpeon.skill.SkillSource;
 
 /**
- * Status bar below the action bar. Shows project pin, selected file, skills
- * toggle, AGENTS.md indicator, MCP toggle, and the Compact button.
+ * Status bar below the action bar. Shows project pin, selected file and the MCP toggle.
+ * The skill selector lives in {@code ModelSkillBarWidget} below the chat input.
  * Uses a wrapping RowLayout so it reflows naturally on narrow views.
  */
 public class StatusLineWidget extends Composite {
 
     /** Single toggle button — hidden when no project is selected. Text: "📌 ProjectName". */
     private final Button btnPin;
-    private final Button btnSkills;
     private final Label fileLabel;
     private final Button btnMcp;
 
-    private Supplier<List<SkillPromptFile>> skillsProvider;
-    private Consumer<SkillMenuSelection> onSkillMenuChange;
-    /** Current project — names the "Project skills" menu header (R9). */
-    private IProject currentProject;
-
-    private final ISharedImages images = PlatformUI.getWorkbench().getSharedImages();
-
     public StatusLineWidget(Composite parent, int style,
             Consumer<Boolean> onPinChange,
-            Consumer<Boolean> onSkillsToggle,
             Consumer<Boolean> onMcpToggle) {
         super(parent, style);
         setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -76,22 +58,6 @@ public class StatusLineWidget extends Composite {
         fileLabel = new Label(this, SWT.NONE);
         fileLabel.setToolTipText("Automatically included in chat context — the AI sees this file");
 
-        // --- Skills toggle ---
-        EclipseUiUtil.newSeparator(this);
-        btnSkills = new Button(this, SWT.TOGGLE);
-        btnSkills.setSelection(true);
-        btnSkills.setImage(images.getImage(ISharedImages.IMG_OBJ_FOLDER));
-        btnSkills.setText("0 skills");
-        btnSkills.setToolTipText("Click to manage individual skills");
-        btnSkills.addListener(SWT.Selection, e -> {
-            if (skillsProvider != null) {
-                btnSkills.setSelection(!btnSkills.getSelection());
-                showSkillsMenu();
-            } else {
-                onSkillsToggle.accept(btnSkills.getSelection());
-            }
-        });
-
         EclipseUiUtil.newSeparator(this);
 
         // --- MCP toggle ---
@@ -99,11 +65,9 @@ public class StatusLineWidget extends Composite {
         btnMcp.setText("MCP off");
         btnMcp.setToolTipText("Enable MCP tools (configure via Window > Preferences > AI Peon MCP)");
         btnMcp.addListener(SWT.Selection, e -> onMcpToggle.accept(btnMcp.getSelection()));
-
     }
 
-    public void update(int skillCount, int projectSkillCount, IProject project, String selected) {
-
+    public void update(IProject project, String selected) {
         // --- Pin: show/hide the button with project name ---
         boolean hasProject = project != null;
         RowData pinRd = (RowData) btnPin.getLayoutData();
@@ -114,29 +78,12 @@ public class StatusLineWidget extends Composite {
         if (project != null) {
             btnPin.setText(project.getName()); // 📌 ProjectName
         }
-        this.currentProject = project;
 
         // --- File ---
         fileLabel.setText(selected == null ? "" : selected);
 
-        setSkillCount(skillCount, projectSkillCount);
-
         layout(true);
         getParent().layout(new Control[] { this });
-    }
-
-    /** Update the skills toggle button text: `N skills (M project)` — the project part only when M > 0 (R9). */
-    public void setSkillCount(int count, int projectCount) {
-        var text = count + " skill" + (count != 1 ? "s" : "");
-        if (projectCount > 0) text += " (" + projectCount + " project)";
-        btnSkills.setText(text);
-        btnSkills.setSelection(count > 0);
-        btnSkills.getParent().layout(false, false);
-    }
-
-    /** Sync the skills toggle button state without firing the listener. */
-    public void setSkillsEnabled(boolean enabled) {
-        btnSkills.setSelection(enabled);
     }
 
     /** Sync the pin button state without firing the listener. */
@@ -159,80 +106,5 @@ public class StatusLineWidget extends Composite {
     /** Returns whether the MCP toggle is currently on. */
     public boolean isMcpEnabled() {
         return btnMcp.getSelection();
-    }
-
-    /** Set the provider for loading skills and callback for menu changes. */
-    public void setSkillsMenuHandler(Supplier<List<SkillPromptFile>> provider, Consumer<SkillMenuSelection> onChange) {
-        this.skillsProvider = provider;
-        this.onSkillMenuChange = onChange;
-    }
-
-    private void showSkillsMenu() {
-        if (skillsProvider == null) return;
-
-        List<SkillPromptFile> skills = skillsProvider.get();
-        if (skills.isEmpty()) return;
-
-        // R9: two sections — config skills, then project skills under a named header
-        var configSkills = new ArrayList<SkillPromptFile>();
-        var projectSkills = new ArrayList<SkillPromptFile>();
-        for (SkillPromptFile skill : skills) {
-            (skill.getSource() == SkillSource.PROJECT ? projectSkills : configSkills).add(skill);
-        }
-
-        Menu menu = new Menu(btnSkills);
-
-        // "All" option at the top
-        MenuItem allItem = new MenuItem(menu, SWT.CHECK);
-        allItem.setText("All Skills");
-        boolean allEnabled = skills.stream().allMatch(SkillPromptFile::isEnabled);
-        allItem.setSelection(allEnabled);
-        allItem.addListener(SWT.Selection, e -> {
-            boolean enable = allItem.getSelection();
-            if (onSkillMenuChange != null) {
-                onSkillMenuChange.accept(new SkillMenuSelection(null, enable, true));
-            }
-        });
-
-        new MenuItem(menu, SWT.SEPARATOR);
-
-        addSkillItems(menu, configSkills);
-
-        // Project section (R9): disabled-style header carrying the project name, then the project skills
-        if (!projectSkills.isEmpty()) {
-            new MenuItem(menu, SWT.SEPARATOR);
-            var header = new MenuItem(menu, SWT.NONE);
-            header.setText("Project skills — " + (currentProject != null ? currentProject.getName() : ""));
-            header.setEnabled(false);
-            addSkillItems(menu, projectSkills);
-        }
-
-        menu.setVisible(true);
-    }
-
-    private void addSkillItems(Menu menu, List<SkillPromptFile> skills) {
-        for (SkillPromptFile skill : skills) {
-            MenuItem item = new MenuItem(menu, SWT.CHECK);
-            item.setText(skill.getName());
-            item.setSelection(skill.isEnabled());
-            item.addListener(SWT.Selection, e -> {
-                if (onSkillMenuChange != null) {
-                    onSkillMenuChange.accept(new SkillMenuSelection(skill.getName(), item.getSelection(), false));
-                }
-            });
-        }
-    }
-
-    /** Encapsulates skill menu selection results. */
-    public static class SkillMenuSelection {
-        public final String skillName;      // null for "All"
-        public final boolean enabled;       // new state
-        public final boolean isAllSkills;   // true if "All" was selected
-
-        public SkillMenuSelection(String skillName, boolean enabled, boolean isAllSkills) {
-            this.skillName = skillName;
-            this.enabled = enabled;
-            this.isAllSkills = isAllSkills;
-        }
     }
 }

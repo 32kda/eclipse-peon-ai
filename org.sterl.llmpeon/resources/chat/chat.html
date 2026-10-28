@@ -96,6 +96,20 @@
             color: #d29922;
         }
 
+        /* Programmatic reminder (loop breaker/guardrail): user-role for the model, but visibly a
+           system note for the human. */
+        .message.REMINDER {
+            border-left: 3px solid #8250df;
+            background: #f6f2ff;
+            color: #4b3b75;
+            font-size: 12px;
+        }
+
+        .message.REMINDER::before {
+            content: "Reminder";
+            color: #8250df;
+        }
+
         .code-pre {
             position: relative;
         }
@@ -121,6 +135,28 @@
         .copy-btn.copied {
             color: #1a7f37;
             opacity: 1;
+        }
+
+        /* Long tool output: collapsed by default, never silently dropped. */
+        .tool-toggle {
+            display: inline-block;
+            margin-bottom: 2px;
+            color: #0969da;
+            cursor: pointer;
+            font-style: normal;
+        }
+
+        .tool-toggle:hover {
+            text-decoration: underline;
+        }
+
+        .path-pre a {
+            color: #0969da;
+            text-decoration: underline;
+        }
+
+        .path-pre a:hover {
+            text-decoration: none;
         }
 
         @keyframes blink-cursor {
@@ -241,12 +277,27 @@
             color: #f85149;
         }
 
+        [data-peon-theme="dark"] .message.REMINDER {
+            border-left-color: #a371f7;
+            background: #211a2e;
+            color: #d2c4f5;
+        }
+
+        [data-peon-theme="dark"] .message.REMINDER::before {
+            color: #a371f7;
+        }
+
         [data-peon-theme="dark"] .copy-btn:hover {
             color: #58a6ff;
         }
 
         [data-peon-theme="dark"] .copy-btn.copied {
             color: #7ee787;
+        }
+
+        [data-peon-theme="dark"] .tool-toggle,
+        [data-peon-theme="dark"] .path-pre a {
+            color: #58a6ff;
         }
 
         [data-peon-theme="dark"] #live-status {
@@ -296,19 +347,40 @@
   <path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/>
 </svg>`;
 
+        /* Tool output keeps the last N lines visible; the rest is one click away. */
+        const TOOL_VISIBLE_LINES = 10;
+
+        function codeBlock(codeHtml, copyable) {
+            return '<pre class="code-pre"><code class="hljs">' + codeHtml + '</code>' +
+                (copyable ? '<button class="copy-btn" title="Copy code">' + COPY_ICON + '</button>' : '') +
+                '</pre>';
+        }
+
+        // A fenced block with exactly one workspace path becomes a clickable open-in-editor link.
+        // URLs and real code stay code — only a bare path with a file extension matches.
+        function isWorkspacePath(text) {
+            if (!text || /\s/.test(text) || text.includes('://')) return false;
+            // Extension must start with a letter so version numbers ("1.2") are not paths.
+            return /^[A-Za-z0-9_./\\:-]+\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(text);
+        }
+
         const md = window.markdownit({
             highlight: function (str, lang) {
                 if (lang && hljs.getLanguage(lang)) {
                     try {
-                        return '<pre class="code-pre"><code class="hljs">' +
-                            hljs.highlight(str, {language: lang, ignoreIllegals: true}).value +
-                            '</code>' +
-                            '<button class="copy-btn">' + COPY_ICON + '</button>' +
-                            '</pre>';
+                        return codeBlock(
+                            hljs.highlight(str, {language: lang, ignoreIllegals: true}).value, true);
                     } catch (__) { }
                 }
 
-                return '<pre><code class="hljs">' + md.utils.escapeHtml(str) + '</code></pre>';
+                const trimmed = (str || '').trim();
+                if (isWorkspacePath(trimmed)) {
+                    return '<pre class="code-pre path-pre"><code class="hljs">' +
+                        '<a href="open-in-editor:' + encodeURIComponent(trimmed) + '">' +
+                        md.utils.escapeHtml(trimmed) + '</a></code></pre>';
+                }
+
+                return codeBlock(md.utils.escapeHtml(str), true);
             },
         });
 
@@ -330,21 +402,45 @@
             window.scrollTo(0, document.body.scrollHeight);
         }
 
+        function getToolLines(div) {
+            if (!div._peonToolLines) div._peonToolLines = [];
+            return div._peonToolLines;
+        }
+
+        // Collapsed by default; the toggle discloses exactly how many lines are hidden.
+        function renderToolMessage(div) {
+            const lines = getToolLines(div);
+            const collapsed = div._peonToolCollapsed !== false;
+            const hidden = collapsed ? Math.max(0, lines.length - TOOL_VISIBLE_LINES) : 0;
+            const shown = hidden > 0 ? lines.slice(lines.length - TOOL_VISIBLE_LINES) : lines;
+
+            let html = "";
+            if (lines.length > TOOL_VISIBLE_LINES) {
+                html += '<span class="tool-toggle" role="button" tabindex="0">'
+                    + (collapsed
+                        ? "⋯ " + hidden + " earlier line" + (hidden === 1 ? "" : "s") + " — show all"
+                        : "show less")
+                    + "</span>";
+                if (collapsed) html += "<br>";
+            }
+            html += shown.map(md.utils.escapeHtml).join("<br>");
+            div.innerHTML = html;
+        }
+
         function toolMessage(message) {
             if (!message) return;
             const container = document.getElementById("chat");
-            const last = container.lastElementChild;
-            if (last && last.classList.contains('TOOL')) {
-                const lines = last.innerHTML.split('<br>').filter(l => l.trim());
-                lines.push(message);
-                if (lines.length > 10) lines.splice(0, lines.length - 10);
-                last.innerHTML = lines.join('<br>');
-            } else {
-                const div = document.createElement("div");
+            let div = container.lastElementChild;
+            if (!div || !div.classList.contains("TOOL")) {
+                div = document.createElement("div");
                 div.className = "message TOOL";
-                div.innerHTML = message;
                 container.appendChild(div);
             }
+            const lines = getToolLines(div);
+            String(message).split(/\r?\n/).forEach(line => {
+                if (line.trim()) lines.push(line);
+            });
+            renderToolMessage(div);
             scrollToBottom();
         }
 
@@ -402,6 +498,15 @@
         }
 
         document.addEventListener("click", e => {
+            const toolToggle = e.target.closest(".tool-toggle");
+            if (toolToggle) {
+                const tool = toolToggle.closest(".message.TOOL");
+                if (tool) {
+                    tool._peonToolCollapsed = tool._peonToolCollapsed === false;
+                    renderToolMessage(tool);
+                }
+                return;
+            }
             const name = e.target.closest(".d2h-file-name");
             if (name) {
                 const path = (name.textContent || "").trim();

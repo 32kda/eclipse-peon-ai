@@ -386,7 +386,7 @@ public class UserContextTest {
     @Test
     public void oneTimeOrdersDeliveredInOrderExactlyOnce() {
         // Characterization test — green before and after the race fix (single-threaded drain).
-        // GIVEN a context with an active selection (so get() reaches the order drain)
+        // GIVEN a context with an active selection
         var context = new UserContext();
         context.setTextSelection(textSelection(9, 9));
         context.addOneTimeOrder(new SimpleContextItem("Order A", "a"));
@@ -400,6 +400,21 @@ public class UserContextTest {
         assertTrue(first.contains("a") && first.indexOf("a") < first.indexOf("b"));
         assertFalse(second.contains("a"));
         assertFalse(second.contains("b"));
+    }
+
+    @Test
+    public void oneTimeOrdersDeliveredWithoutProjectOrSelection() {
+        // GIVEN a context with no project, no resource and no text selection
+        var context = new UserContext();
+        context.addOneTimeOrder(new SimpleContextItem("Order A", "a"));
+
+        // WHEN the context is requested
+        var first = rendersOf(context.get());
+        var second = rendersOf(context.get());
+
+        // THEN the one-time order still goes out exactly once (mention attachments rely on this)
+        assertTrue(first.contains("a"));
+        assertFalse(second.contains("a"));
     }
 
     @Test

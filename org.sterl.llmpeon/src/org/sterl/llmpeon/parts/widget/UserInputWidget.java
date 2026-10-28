@@ -1,6 +1,9 @@
 package org.sterl.llmpeon.parts.widget;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import org.eclipse.debug.ui.DebugUITools;
@@ -15,10 +18,16 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
+import org.sterl.llmpeon.mention.MentionCandidate;
+import org.sterl.llmpeon.mention.MentionService;
+import org.sterl.llmpeon.mention.MentionToken;
+import org.sterl.llmpeon.parts.mention.DialogMentionProvider;
 import org.sterl.llmpeon.parts.shared.EclipseUiUtil;
 import org.sterl.llmpeon.parts.shared.ImageUtil;
 import org.sterl.llmpeon.parts.shared.SwtUtil;
 import org.sterl.llmpeon.prompt.model.SimplePromptFile;
+import org.sterl.llmpeon.skill.SkillPromptFile;
+import org.sterl.llmpeon.skill.SkillSource;
 
 /**
  * User input area: file chips bar (hidden until files attached), auto-resizing
@@ -45,7 +54,15 @@ public class UserInputWidget extends Composite {
 
     private final Color colorRecording;
 
-    private SlashMenuPopup slashPopup;
+    private CompletionPopup<SimplePromptFile> slashPopup;
+    private CompletionPopup<MentionCandidate> mentionPopup;
+    private MentionService mentionService;
+    private List<DialogMentionProvider> dialogMentionProviders = List.of();
+    private Set<Character> mentionTriggers = Set.of();
+    private MentionToken activeMentionToken;
+    private int lastDialogStart = -1;
+    private char lastDialogTrigger;
+    private boolean suppressCompletionRefresh;
     private Supplier<List<SimplePromptFile>> commandSupplier;
 
     public UserInputWidget(Composite parent, int style, Runnable onSend, Runnable stopHandler, Runnable onMicClick) {
@@ -90,39 +107,17 @@ public class UserInputWidget extends Composite {
             }
         }));
 
-        // Refresh the slash popup on every modification so it tracks the current prefix.
-        textInput.addModifyListener(e -> refreshSlashPopup());
+        // Refresh completions on every modification so they track the current prefix.
+        textInput.addModifyListener(e -> refreshCompletions());
 
-        // Steal arrow / Enter / Escape ONLY while the slash popup is open. Plain Enter still
-        // produces a newline in StyledText when the popup is closed.
+        // Steal arrow / Enter / Escape ONLY while a completion popup is open. Plain Enter still
+        // produces a newline in StyledText when no popup is open.
         textInput.addVerifyKeyListener(e -> {
-            if (slashPopup == null || !slashPopup.isOpen()) return;
-            switch (e.keyCode) {
-            case SWT.ARROW_DOWN:
-                slashPopup.moveSelection(1);
-                e.doit = false;
-                break;
-            case SWT.ARROW_UP:
-                slashPopup.moveSelection(-1);
-                e.doit = false;
-                break;
-            case SWT.ESC:
-                slashPopup.hide();
-                e.doit = false;
-                break;
-            case SWT.CR:
-            case SWT.LF:
-            case SWT.KEYPAD_CR:
-                // Plain Enter commits the selection; Ctrl/Cmd+Enter still sends the message.
-                if ((e.stateMask & (SWT.CTRL | SWT.COMMAND)) == 0) {
-                    if (slashPopup.commitSelection()) e.doit = false;
-                }
-                break;
-            case SWT.TAB:
-                if (slashPopup.commitSelection()) e.doit = false;
-                break;
-            default:
-                break;
+            if (mentionPopup != null && mentionPopup.isOpen()) {
+                if (handlePopupKey(e, mentionPopup)) return;
+            }
+            if (slashPopup != null && slashPopup.isOpen()) {
+                handlePopupKey(e, slashPopup);
             }
         });
 
@@ -213,14 +208,21 @@ public class UserInputWidget extends Composite {
         //rightColumn.layout(true, true);
     }
 
+    /** Enable/disable sending — disabled when the active agent has no model configured. */
+    public void setSendEnabled(boolean enabled) {
+        if (!sendButton.isDisposed()) sendButton.setEnabled(enabled);
+    }
+
     @Override
     public boolean setFocus() {
         return textInput.setFocus();
     }
 
-    /** Hides the slash-command popup if it is currently shown. Safe to call any time. */
+    /** Hides the completion popups if currently shown. Safe to call any time. */
     public void dismissSlashMenu() {
         if (slashPopup != null) slashPopup.hide();
+        if (mentionPopup != null) mentionPopup.hide();
+        activeMentionToken = null;
     }
 
     /**
@@ -230,13 +232,86 @@ public class UserInputWidget extends Composite {
     public void enableSlashCommands(Supplier<List<SimplePromptFile>> commandSupplier) {
         this.commandSupplier = commandSupplier;
         if (commandSupplier == null) {
-            disposeSlashPopup();
+            disposePopup(slashPopup);
+            slashPopup = null;
             return;
         }
-        if (slashPopup == null) {  // only enters here once...
-            slashPopup = new SlashMenuPopup(this, this::applyCommandSelection);
-            addDisposeListener(e -> disposeSlashPopup()); // ...so this is safe
+        if (slashPopup == null) {
+            slashPopup = new CompletionPopup<>(this, this::applyCommandSelection);
+            addDisposeListener(e -> disposePopup(slashPopup));
         }
+    }
+
+    /**
+     * Enables mention completion ({@code @} files, later {@code #} symbols). The service is shared
+     * with every inline trigger; pass {@code null} to disable.
+     */
+    public void enableMentions(MentionService mentionService) {
+        enableMentions(mentionService, List.of());
+    }
+
+    /**
+     * Enables inline mention completion plus native-picker providers (e.g. the JDT type dialog for
+     * {@code #}). Either list may be empty; both empty disables mentions.
+     */
+    public void enableMentions(MentionService mentionService, List<DialogMentionProvider> dialogProviders) {
+        this.mentionService = mentionService;
+        this.dialogMentionProviders = dialogProviders == null ? List.of() : List.copyOf(dialogProviders);
+
+        var triggers = new HashSet<Character>();
+        if (mentionService != null) triggers.addAll(mentionService.triggers());
+        this.dialogMentionProviders.forEach(provider -> triggers.add(provider.trigger()));
+        this.mentionTriggers = Set.copyOf(triggers);
+
+        if (mentionService == null && this.dialogMentionProviders.isEmpty()) {
+            disposePopup(mentionPopup);
+            mentionPopup = null;
+            return;
+        }
+        if (mentionPopup == null) {
+            mentionPopup = new CompletionPopup<>(this, this::applyMentionSelection);
+            addDisposeListener(e -> disposePopup(mentionPopup));
+        }
+    }
+
+    private void disposePopup(CompletionPopup<?> popup) {
+        if (popup != null) popup.dispose();
+    }
+
+    private boolean handlePopupKey(org.eclipse.swt.events.VerifyEvent e, CompletionPopup<?> popup) {
+        switch (e.keyCode) {
+        case SWT.ARROW_DOWN:
+            popup.moveSelection(1);
+            e.doit = false;
+            return true;
+        case SWT.ARROW_UP:
+            popup.moveSelection(-1);
+            e.doit = false;
+            return true;
+        case SWT.ESC:
+            popup.hide();
+            e.doit = false;
+            return true;
+        case SWT.CR:
+        case SWT.LF:
+        case SWT.KEYPAD_CR:
+            // Plain Enter commits the selection; Ctrl/Cmd+Enter still sends the message.
+            if ((e.stateMask & (SWT.CTRL | SWT.COMMAND)) == 0) {
+                if (popup.commitSelection()) e.doit = false;
+            }
+            return true;
+        case SWT.TAB:
+            if (popup.commitSelection()) e.doit = false;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    private void refreshCompletions() {
+        if (suppressCompletionRefresh) return;
+        refreshSlashPopup();
+        refreshMentionPopup();
     }
 
     private void refreshSlashPopup() {
@@ -247,8 +322,96 @@ public class UserInputWidget extends Composite {
             return;
         }
         var commands = commandSupplier.get();
-        if (commands == null || commands.isEmpty()) { slashPopup.hide(); return; }
-        slashPopup.show(commands, extractPrefix(text), textInput.getCaretDisplayLocation());
+        if (commands == null || commands.isEmpty()) {
+            slashPopup.hide();
+            return;
+        }
+
+        var prefix = extractPrefix(text).toLowerCase(Locale.ROOT);
+        var items = new java.util.ArrayList<CompletionPopup.Item<SimplePromptFile>>();
+        for (var cmd : commands) {
+            if (!cmd.getName().toLowerCase(Locale.ROOT).startsWith(prefix)) continue;
+            String label = "/" + cmd.getName();
+            String detail = "COMMAND";
+            if (cmd instanceof SkillPromptFile skill) {
+                detail = "SKILL";
+                // R9: project skills carry the source suffix in autocomplete (the name filter stays suffix-free)
+                if (skill.getSource() == SkillSource.PROJECT) label += " [project]";
+            }
+            items.add(new CompletionPopup.Item<>(label, detail, cmd));
+        }
+        if (items.isEmpty()) {
+            slashPopup.hide();
+            return;
+        }
+        if (mentionPopup != null) mentionPopup.hide();
+        slashPopup.show(items, textInput.getCaretDisplayLocation());
+    }
+
+    private void refreshMentionPopup() {
+        if (mentionPopup == null || mentionTriggers.isEmpty()) return;
+        var text = textInput.getText();
+        var token = MentionToken.at(text, textInput.getCaretOffset(), mentionTriggers);
+        if (token.isEmpty()) {
+            mentionPopup.hide();
+            activeMentionToken = null;
+            lastDialogStart = -1;
+            return;
+        }
+
+        var active = token.get();
+        var dialogProvider = dialogProviderFor(active.trigger());
+        if (dialogProvider != null) {
+            handleDialogMention(active, dialogProvider);
+            return;
+        }
+        if (mentionService == null) {
+            mentionPopup.hide();
+            return;
+        }
+
+        var candidates = mentionService.find(active.trigger(), active.prefix(), 50);
+        if (candidates.isEmpty()) {
+            mentionPopup.hide();
+            activeMentionToken = null;
+            return;
+        }
+        if (slashPopup != null) slashPopup.hide();
+        activeMentionToken = active;
+        var items = new java.util.ArrayList<CompletionPopup.Item<MentionCandidate>>(candidates.size());
+        for (var candidate : candidates) {
+            items.add(new CompletionPopup.Item<>(
+                    active.trigger() + candidate.insertText(),
+                    candidate.detail(),
+                    candidate));
+        }
+        mentionPopup.show(items, textInput.getCaretDisplayLocation());
+    }
+
+    private DialogMentionProvider dialogProviderFor(char trigger) {
+        for (var provider : dialogMentionProviders) {
+            if (provider.trigger() == trigger) return provider;
+        }
+        return null;
+    }
+
+    /**
+     * Opens the native picker once per token. The guard prevents a reopen on every modify event
+     * after the user canceled — the token start must change (delete + retype) to open it again.
+     */
+    private void handleDialogMention(MentionToken token, DialogMentionProvider provider) {
+        if (token.start() == lastDialogStart && token.trigger() == lastDialogTrigger) return;
+        lastDialogStart = token.start();
+        lastDialogTrigger = token.trigger();
+
+        if (mentionPopup != null) mentionPopup.hide();
+        if (slashPopup != null) slashPopup.hide();
+
+        String picked = provider.pick(getShell(), token.prefix());
+        if (picked == null || picked.isBlank()) return;
+
+        replaceMentionToken(token, token.trigger() + picked + " ");
+        lastDialogStart = -1;
     }
 
     private static boolean hasWhitespaceAfterSlash(String text) {
@@ -270,15 +433,31 @@ public class UserInputWidget extends Composite {
 
     private void applyCommandSelection(SimplePromptFile cmd) {
         String replacement = "/" + cmd.getName() + " ";
-        textInput.setText(replacement);
-        textInput.setCaretOffset(replacement.length()); // cursor after the space
+        suppressCompletionRefresh = true;
+        try {
+            textInput.setText(replacement);
+            textInput.setCaretOffset(replacement.length()); // cursor after the space
+        } finally {
+            suppressCompletionRefresh = false;
+        }
         textInput.setFocus();
     }
 
-    private void disposeSlashPopup() {
-        if (slashPopup != null) {
-            slashPopup.dispose();
-            slashPopup = null;
+    private void applyMentionSelection(MentionCandidate candidate) {
+        var token = activeMentionToken;
+        if (token == null) return;
+        replaceMentionToken(token, token.trigger() + candidate.insertText() + " ");
+    }
+
+    private void replaceMentionToken(MentionToken token, String replacement) {
+        suppressCompletionRefresh = true;
+        try {
+            textInput.replaceTextRange(token.start(), token.length(), replacement);
+            textInput.setCaretOffset(token.start() + replacement.length());
+        } finally {
+            suppressCompletionRefresh = false;
         }
+        activeMentionToken = null;
+        textInput.setFocus();
     }
 }

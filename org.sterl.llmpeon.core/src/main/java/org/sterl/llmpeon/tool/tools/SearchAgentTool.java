@@ -26,6 +26,9 @@ public class SearchAgentTool extends AbstractTool {
     private Predicate<SmartToolExecutor> filter = e -> !e.getTool().isEditTool() 
             && !(e.getTool() instanceof SearchAgentTool)
             && !(e.getTool() instanceof ShellTool)
+            && !e.isContributed()
+            // a research sub-agent must not start further agents
+            && !(e.getTool() instanceof StartAgentTool)
             // R-CC-15: a sub-loop has no owning agent — compactSession would hit the parent
             && !(e.getTool() instanceof CompactSessionTool);
 

@@ -38,9 +38,6 @@ public class UserContext {
     }
 
     public List<ContextItem> get() {
-        // R-SEL-2/4: a pure text selection or type goes out even without project or resource.
-        if (currentProject == null && selectedResource == null && !hasTextSelection() && javaType == null) return List.of();
-
         var result = new LinkedList<ContextItem>();
         if (currentProject != null) {
             result.add(new SimpleContextItem("Project info " + currentProject.getName(),

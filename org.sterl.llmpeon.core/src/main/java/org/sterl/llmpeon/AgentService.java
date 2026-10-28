@@ -5,11 +5,13 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.sterl.llmpeon.agent.AgentDefinition;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
@@ -17,8 +19,12 @@ import org.sterl.llmpeon.agent.AiReviewAgent;
 import org.sterl.llmpeon.agent.CustomAgent;
 import org.sterl.llmpeon.agentorder.AgentOrder;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.memory.AgentHistoryStore;
+import org.sterl.llmpeon.memory.SessionAgentHistoryStore;
 import org.sterl.llmpeon.prompt.PromptYmlParser;
 import org.sterl.llmpeon.prompt.model.SimplePromptFile;
+import org.sterl.llmpeon.session.SessionId;
+import org.sterl.llmpeon.session.SessionService;
 import org.sterl.llmpeon.tool.ToolService;
 
 import lombok.Getter;
@@ -36,13 +42,22 @@ public class AgentService {
 
     private final ConfiguredChatModel chatModel;
     private final ToolService toolService;
-    /** Directory containing the {@code <agent>-history.jsonl} files directly (ADR-0041 R2); null = RAM-only. */
+    /** Directory containing legacy {@code <agent>-history.jsonl} files; null = RAM-only. */
     private final Path historyStateDir;
+    /** Non-null when histories belong to one session (new multi-session path). */
+    private final SessionService sessionService;
+    private final SessionId sessionId;
 
     private final Map<String, AiAgent> agents = new ConcurrentHashMap<>();
 
     /** Agents added via {@link #addPersistentAgent(AiAgent)} — survive {@link #clearAgents()}. */
     private final Map<String, AiAgent> persistentAgents = new ConcurrentHashMap<>();
+
+    /** Bundle-contributed agents; file agents and persistent built-ins win on a name collision. */
+    private volatile List<AgentDefinition> contributedAgents = List.of();
+
+    /** Name-keyed enabled state — contributed agents can be disabled without uninstalling them. */
+    private final Map<String, Boolean> enabledByName = new ConcurrentHashMap<>();
 
     private volatile Path agentsDirectory;
 
@@ -84,19 +99,52 @@ public class AgentService {
             ToolService toolService,
             ConfiguredChatModel configuredChatModel,
             Path historyStateDir) {
+        this(withDefaultAgent, agentsDirectory, toolService, configuredChatModel, historyStateDir, null, null);
+    }
+
+    /** Session-backed agents: all working contexts are stored in one append-only session log. */
+    public AgentService(
+            boolean withDefaultAgent,
+            Path agentsDirectory,
+            ToolService toolService,
+            ConfiguredChatModel configuredChatModel,
+            SessionService sessionService,
+            SessionId sessionId) {
+        this(withDefaultAgent, agentsDirectory, toolService, configuredChatModel, null, sessionService, sessionId);
+    }
+
+    private AgentService(
+            boolean withDefaultAgent,
+            Path agentsDirectory,
+            ToolService toolService,
+            ConfiguredChatModel configuredChatModel,
+            Path historyStateDir,
+            SessionService sessionService,
+            SessionId sessionId) {
         this.chatModel = configuredChatModel;
         this.toolService = toolService;
         this.historyStateDir = historyStateDir;
+        this.sessionService = sessionService;
+        this.sessionId = sessionId;
         
         Objects.requireNonNull(this.chatModel, "ConfiguredChatModel cannot be null");
         Objects.requireNonNull(this.toolService, "ToolService cannot be null");
+        if ((sessionService == null) != (sessionId == null)) {
+            throw new IllegalArgumentException("sessionService and sessionId must be set together");
+        }
 
         if (withDefaultAgent) {
-            devAgent = new AiDevAgent(chatModel, toolService, historyStateDir);
+            devAgent = sessionService == null
+                    ? new AiDevAgent(chatModel, toolService, historyStateDir)
+                    : new AiDevAgent(chatModel, toolService, store(AiDevAgent.NAME));
             this.persistentAgents.put(devAgent.getName(), devAgent);
-            planAgent = new AiPlanAgent(chatModel, toolService, historyStateDir);
+            planAgent = sessionService == null
+                    ? new AiPlanAgent(chatModel, toolService, historyStateDir)
+                    : new AiPlanAgent(chatModel, toolService, store(AiPlanAgent.NAME));
             this.persistentAgents.put(planAgent.getName(), planAgent);
-            reviewAgent = new AiReviewAgent(chatModel, toolService, historyStateDir);
+            reviewAgent = sessionService == null
+                    ? new AiReviewAgent(chatModel, toolService, historyStateDir)
+                    : new AiReviewAgent(chatModel, toolService, store(AiReviewAgent.NAME));
             this.persistentAgents.put(reviewAgent.getName(), reviewAgent);
             this.activeAgent = devAgent;
         } else {
@@ -109,17 +157,42 @@ public class AgentService {
         reloadAgents();
     }
 
+    private AgentHistoryStore store(String agentName) {
+        return new SessionAgentHistoryStore(sessionService, sessionId, agentName);
+    }
+
     public void clear() {
         agents.clear();
     }
 
     /**
-     * Returns loaded and persistent agents in configured order.
+     * Returns loaded and persistent agents in configured order. Disabled agents are hidden from
+     * this view (the management lookup {@link #get(String)} still finds them).
      */
     public List<AiAgent> getAgents() {
         var all = new java.util.LinkedHashSet<AiAgent>(agents.values());
         all.addAll(persistentAgents.values());
-        return agentOrder.sort(all);
+        return agentOrder.sort(all).stream().filter(a -> isAgentEnabled(a.getName())).toList();
+    }
+
+    /** Enable/disable an agent by name — survives reloads, same pattern as skills. */
+    public void setAgentEnabled(String name, boolean enabled) {
+        if (name == null) return;
+        enabledByName.put(name.toLowerCase(Locale.ROOT), enabled);
+    }
+
+    public boolean isAgentEnabled(String name) {
+        return name == null || enabledByName.getOrDefault(name.toLowerCase(Locale.ROOT), true);
+    }
+
+    /** Replaces the bundle-contributed agents; file and persistent agents override by name. */
+    public void setContributedAgents(List<AgentDefinition> definitions) {
+        this.contributedAgents = definitions == null ? List.of() : List.copyOf(definitions);
+        reloadAgents();
+    }
+
+    public List<AgentDefinition> getContributedAgentDefinitions() {
+        return contributedAgents;
     }
 
     public int loadedAgentCount() {
@@ -164,36 +237,60 @@ public class AgentService {
     }
 
     public boolean reloadAgents() {
+        var newAgents = new ConcurrentHashMap<String, AiAgent>();
         if (agentsDirectory != null && Files.isDirectory(agentsDirectory)) {
             try {
                 agentOrder.load(agentsDirectory);
-                reloadAgentConfig();
+                loadFileAgents(newAgents);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to reload agents from: " + agentsDirectory, e);
             }
-        } else {
-            clearAgents();
         }
+        loadContributedAgents(newAgents);
+        clearAgents();
+        this.agents.putAll(newAgents);
+        fixActiveAgent();
         return true;
     }
 
-    private void reloadAgentConfig() throws IOException {
-        var newAgents = new ConcurrentHashMap<String, AiAgent>();
+    private void loadFileAgents(Map<String, AiAgent> newAgents) throws IOException {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(agentsDirectory)) {
             for (Path entry : entries) {
                 var agentCfg = readAgentPrompt(entry);
                 if (agentCfg != null) {
                     var agent = this.agents.get(agentCfg.getName());
                     if (agent == null) {
-                        agent = new CustomAgent(agentCfg, chatModel, toolService, historyStateDir);
+                        agent = sessionService == null
+                                ? new CustomAgent(agentCfg, chatModel, toolService, historyStateDir)
+                                : new CustomAgent(agentCfg, chatModel, toolService, store(agentCfg.getName()));
                     } else if (agent instanceof CustomAgent ca) ca.setPromptFile(agentCfg);
                     newAgents.put(agent.getName(), agent);
                 }
             }
         }
-        clearAgents();
-        this.agents.putAll(newAgents);
-        // clear active if gone
+    }
+
+    private void loadContributedAgents(Map<String, AiAgent> newAgents) {
+        for (var definition : contributedAgents) {
+            if (definition == null || definition.name() == null) continue;
+            // file agents and persistent built-ins win a name collision
+            if (newAgents.containsKey(definition.name()) || persistentAgents.containsKey(definition.name())) {
+                continue;
+            }
+            var agent = this.agents.get(definition.name());
+            if (agent instanceof CustomAgent custom) {
+                custom.setPromptFile(definition.toPromptFile());
+            } else {
+                agent = sessionService == null
+                        ? new CustomAgent(definition.toPromptFile(), chatModel, toolService, historyStateDir)
+                        : new CustomAgent(definition.toPromptFile(), chatModel, toolService,
+                                store(definition.name()));
+            }
+            newAgents.put(agent.getName(), agent);
+        }
+    }
+
+    private void fixActiveAgent() {
         if (activeAgent != null && !agents.containsKey(activeAgent.getName())) {
             this.activeAgent = agents.isEmpty() ? null : agents.values().iterator().next();
         } else if (activeAgent == null && !agents.isEmpty()) {

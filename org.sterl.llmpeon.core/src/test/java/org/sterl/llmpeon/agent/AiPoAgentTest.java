@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -86,7 +87,7 @@ class AiPoAgentTest {
         var plan = new AiPlanAgent(config, new ToolService());
         var dev = new AiDevAgent(config, new ToolService());
         var review = new AiReviewAgent(config, new ToolService());
-        var po = new AiPoAgent(config, new ToolService(), null,
+        var po = new AiPoAgent(config, new ToolService(), (Path) null,
                 List.of(new NamedAgent("Da Thinka", plan), new NamedAgent("Da Mek", dev),
                         new NamedAgent("Da Dok", review)));
 
@@ -105,7 +106,7 @@ class AiPoAgentTest {
         var config = LlmConfig.newConfig(AiProvider.OLLAMA, "test-model", "http://localhost:9999").build();
         var plan = new AiPlanAgent(config, new ToolService());
         var dev = new AiDevAgent(config, new ToolService());
-        var po = new AiPoAgent(config, new ToolService(), null,
+        var po = new AiPoAgent(config, new ToolService(), (Path) null,
                 List.of(new NamedAgent("Da Thinka", plan), new NamedAgent("Da Mek", dev)));
 
         var team = po.getTeam();

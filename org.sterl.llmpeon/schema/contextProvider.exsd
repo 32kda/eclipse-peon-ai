@@ -1,0 +1,77 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?eclipse version="3.4"?>
+<schema targetNamespace="org.sterl.llmpeon" xmlns="http://www.w3.org/2001/XMLSchema">
+<annotation>
+  <appInfo>
+    <meta.schema plugin="org.sterl.llmpeon" id="contextProvider" name="Peon context provider"/>
+  </appInfo>
+  <documentation>
+    Contributes automatic context items (e.g. PDE target-platform info, JDT project
+    problems). The provider class must implement
+    org.sterl.llmpeon.context.ContextProvider and have a no-arg constructor.
+
+    Scope.STATIC is baked into the static system prompt (stable data only, KV-cache
+    friendly). Scope.TURN is injected per turn (default). Providers must return an
+    empty list when not applicable; the host caps each provider at five items and
+    discloses truncation. A throwing provider is logged and surfaced as a small
+    "Context provider failed" item - never swallowed.
+  </documentation>
+</annotation>
+
+<element name="extension">
+  <annotation>
+    <appInfo>
+      <meta.element/>
+    </appInfo>
+  </annotation>
+  <complexType>
+    <sequence>
+      <element ref="contextProvider" minOccurs="1" maxOccurs="unbounded"/>
+    </sequence>
+    <attribute name="point" type="string" use="required">
+      <annotation>
+        <documentation>
+          The extension point id: org.sterl.llmpeon.contextProvider
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="id" type="string">
+      <annotation>
+        <documentation>
+          Optional unique id of the contribution.
+        </documentation>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable contribution name.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+<element name="contextProvider">
+  <complexType>
+    <attribute name="class" type="string" use="required">
+      <annotation>
+        <documentation>
+          Implementation of org.sterl.llmpeon.context.ContextProvider.
+        </documentation>
+        <appInfo>
+          <meta.attribute kind="java"/>
+        </appInfo>
+      </annotation>
+    </attribute>
+    <attribute name="name" type="string">
+      <annotation>
+        <documentation>
+          Optional human-readable name used for diagnostics.
+        </documentation>
+      </annotation>
+    </attribute>
+  </complexType>
+</element>
+
+</schema>

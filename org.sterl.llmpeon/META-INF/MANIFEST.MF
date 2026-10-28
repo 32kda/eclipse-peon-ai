@@ -3,7 +3,14 @@ Bundle-ManifestVersion: 2
 Bundle-Name: Peon AI
 Bundle-SymbolicName: org.sterl.llmpeon;singleton:=true
 Bundle-Version: 2.8.1.qualifier
-Export-Package: org.sterl.llmpeon.parts
+Export-Package: org.sterl.llmpeon.parts,
+ org.sterl.llmpeon.parts.mention,
+ org.sterl.llmpeon.agent,
+ org.sterl.llmpeon.skill,
+ org.sterl.llmpeon.mention,
+ org.sterl.llmpeon.tool,
+ org.sterl.llmpeon.context,
+ org.sterl.llmpeon.mcp
 Bundle-Vendor: Paul Sterl
 Require-Bundle: org.eclipse.swt,
  org.eclipse.jface,
@@ -33,7 +40,8 @@ Require-Bundle: org.eclipse.swt,
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Import-Package: jakarta.annotation;version="[2.0.0,4.0.0)",
  jakarta.inject;version="[2.0.0,3.0.0)",
- org.osgi.framework;version="[1.10.0,2.0.0)"
+ org.osgi.framework;version="[1.10.0,2.0.0)",
+ org.eclipse.jdt.ui;resolution:=optional
 Automatic-Module-Name: org.sterl.llmpeon
 Bundle-ClassPath: .,
  lib/llmpeon-core.jar,

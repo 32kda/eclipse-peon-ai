@@ -74,6 +74,8 @@
         <button class="test-btn" onclick="testUserMessage()">User Message</button>
         <button class="test-btn" onclick="testAiMessage()">AI Message (with code)</button>
         <button class="test-btn" onclick="testToolMessage()">Tool Message</button>
+        <button class="test-btn" onclick="testLongToolMessage()">Long Tool Output (40 lines)</button>
+        <button class="test-btn" onclick="testFencedPath()">AI Message (fenced path)</button>
         <button class="test-btn" onclick="testProblemMessage()">Problem Message</button>
         <button class="test-btn" onclick="testQuestionMessage()">Question Message</button>
         <button class="test-btn" onclick="testQuestionFormatted()">Question (formatted)</button>
@@ -129,6 +131,16 @@
 
         function testToolMessage() {
             send({role: 'TOOL', message: 'Reading file: src/main/java/Hello.java'});
+        }
+
+        function testLongToolMessage() {
+            const lines = [];
+            for (let i = 1; i <= 40; i++) lines.push('tool line ' + i + ': reading src/Foo' + i + '.java');
+            send({role: 'TOOL', message: lines.join('\n')});
+        }
+
+        function testFencedPath() {
+            send({role: 'AI', message: 'Found it here:\n\n```\nsrc/main/java/Hello.java\n```\n\nAnd a URL stays a URL:\n\n```\nhttps://example.com/docs\n```'});
         }
 
         function testProblemMessage() {

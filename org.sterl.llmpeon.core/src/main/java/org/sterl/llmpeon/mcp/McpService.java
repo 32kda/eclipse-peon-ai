@@ -25,11 +25,12 @@ import lombok.extern.slf4j.Slf4j;
  * Call {@link #disconnect()} or {@link #close()} to release them.
  */
 @Slf4j
-public class McpService implements AutoCloseable {
+public class McpService implements McpToolGateway {
 
     private final List<McpServerConfig> servers;
     private final List<McpClient> clients = new ArrayList<>();
     private final Map<String, McpClient> toolToClient = new HashMap<>();
+    private final Map<String, String> toolToServer = new HashMap<>();
     private final List<ToolSpecification> toolSpecs = new ArrayList<>();
 
     public McpService(List<McpServerConfig> servers) {
@@ -78,6 +79,7 @@ public class McpService implements AutoCloseable {
                 for (var spec : tools) {
                     toolSpecs.add(spec);
                     toolToClient.put(spec.name(), client);
+                    toolToServer.put(spec.name(), server.name());
                     log.info("Connected MCP " + server.name() + " tool " + spec.name());
                 }
             } catch (Exception e) {
@@ -146,6 +148,7 @@ public class McpService implements AutoCloseable {
     /**
      * Executes an MCP tool by name. Returns an error string if the tool is not found.
      */
+    @Override
     public String executeTool(ToolExecutionRequest request) {
         var client = toolToClient.get(request.name());
         if (client == null) {
@@ -160,13 +163,20 @@ public class McpService implements AutoCloseable {
     }
 
     /** Returns the aggregated tool specifications from all connected servers. */
+    @Override
     public List<ToolSpecification> getToolSpecifications() {
         return Collections.unmodifiableList(toolSpecs);
     }
 
     /** Returns true if this tool name belongs to an MCP tool. */
+    @Override
     public boolean hasTool(String toolName) {
         return toolToClient.containsKey(toolName);
+    }
+
+    @Override
+    public String toolServer(String toolName) {
+        return toolToServer.get(toolName);
     }
 
     /** Closes all client connections and clears the tool registry. */
@@ -178,6 +188,7 @@ public class McpService implements AutoCloseable {
         }
         clients.clear();
         toolToClient.clear();
+        toolToServer.clear();
         toolSpecs.clear();
     }
 

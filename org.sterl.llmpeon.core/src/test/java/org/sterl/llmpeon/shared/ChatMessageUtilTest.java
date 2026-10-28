@@ -15,6 +15,19 @@ import dev.langchain4j.data.message.UserMessage;
 
 class ChatMessageUtilTest {
 
+    @Test
+    void joinPreservesUserMessageAttributes() {
+        var first = UserMessage.builder().addContent(dev.langchain4j.data.message.TextContent.from("a"))
+                .attributes(java.util.Map.of("k", "v")).build();
+        var second = org.sterl.llmpeon.session.UserReminder.create("reminder");
+
+        var joined = ChatMessageUtil.join(first, second);
+
+        assertThat(joined.attributes()).containsEntry("k", "v")
+                .containsEntry(org.sterl.llmpeon.session.UserReminder.ATTRIBUTE, true);
+        assertThat(org.sterl.llmpeon.session.UserReminder.isReminder(joined)).isTrue();
+    }
+
     // R-CIB-4 / ADR-0030-Landmine — a SYSTEM message must be rendered, not silently dropped.
 
     @Test

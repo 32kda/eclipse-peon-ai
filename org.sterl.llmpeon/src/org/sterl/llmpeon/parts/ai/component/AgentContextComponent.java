@@ -13,6 +13,8 @@ import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.AgentsMdContextItem;
 import org.sterl.llmpeon.context.ContextItem;
+import org.sterl.llmpeon.context.ContextProvider;
+import org.sterl.llmpeon.context.ContextRequest;
 import org.sterl.llmpeon.context.EclipseFileContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.context.StaticContextItem;
@@ -24,8 +26,10 @@ import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
+import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
+import org.sterl.llmpeon.tool.tools.StartAgentTool;
 
 /**
  * Owns the agent context assembly: the per-turn context (history injection), the Env-only
@@ -44,6 +48,12 @@ public class AgentContextComponent {
     private final Supplier<AiAgent> activeAgent;
     private final Supplier<LlmConfig> config;
     private final Supplier<List<AiAgent>> agents;
+    private final Supplier<String> skillCatalog;
+    private final Supplier<String> agentCatalog;
+    private final List<ContextProvider> contextProviders;
+
+    /** Hard cap per provider — a runaway contribution must not inflate the turn. */
+    private static final int MAX_PROVIDER_ITEMS = 5;
 
     /** Last saved plan file (workspace-relative reference, not disk — avoids stale project refs). */
     private IFile plan;
@@ -58,7 +68,10 @@ public class AgentContextComponent {
             ToolService sharedToolService,
             Supplier<AiAgent> activeAgent,
             Supplier<LlmConfig> config,
-            Supplier<List<AiAgent>> agents) {
+            Supplier<List<AiAgent>> agents,
+            Supplier<String> skillCatalog,
+            Supplier<String> agentCatalog,
+            List<ContextProvider> contextProviders) {
         this.projectRef = projectRef;
         this.workspaceMemoryTool = workspaceMemoryTool;
         this.userContext = userContext;
@@ -67,6 +80,9 @@ public class AgentContextComponent {
         this.activeAgent = activeAgent;
         this.config = config;
         this.agents = agents;
+        this.skillCatalog = skillCatalog;
+        this.agentCatalog = agentCatalog;
+        this.contextProviders = contextProviders == null ? List.of() : List.copyOf(contextProviders);
     }
 
     /**
@@ -75,12 +91,41 @@ public class AgentContextComponent {
      * Jon's slaves share his list via {@link AiPoAgent#setStaticContext}.
      */
     public void initStaticContext() {
-        var context = new ArrayList<ContextItem>();
-        context.add(new StaticContextItem());
+        var common = new ArrayList<ContextItem>();
+        common.add(new StaticContextItem());
+
+        // Short descriptions only — bodies are expanded via skillRead / the sub-agent is started
+        // via startAgent. Keeps the catalog cheap and KV-cache friendly (static until refresh).
+        var skills = skillCatalog == null ? null : skillCatalog.get();
+        if (StringUtil.hasValue(skills)) {
+            common.add(new SimpleContextItem("Skill catalog",
+                    "Skills — call skillRead(name) with one of these before a matching task:"
+                            + System.lineSeparator() + skills));
+        }
+
+        var delegatableAgents = agentCatalog == null ? null : agentCatalog.get();
+        ContextItem agentCatalogItem = StringUtil.hasValue(delegatableAgents)
+                ? new SimpleContextItem("Agent catalog",
+                        "Delegatable agents — start one with startAgent(agent, prompt):"
+                                + System.lineSeparator() + delegatableAgents)
+                : null;
 
         for (var agent : agents.get()) {
+            var context = new ArrayList<ContextItem>(common);
+            // only agents that can actually call startAgent get the catalog — no dangling hint
+            if (agentCatalogItem != null && canStartAgents(agent)) {
+                context.add(agentCatalogItem);
+            }
+            context.addAll(providedContext(agent, ContextProvider.Scope.STATIC));
             agent.setStaticContext(context);
         }
+    }
+
+    private static boolean canStartAgents(AiAgent agent) {
+        return agent != null && !agent.isTool() && !(agent instanceof AiScaffoldAgent)
+                // a custom agent's tools: allowlist can hide startAgent — never hint at a tool
+                // the model cannot call
+                && agent.isToolNameActive(StartAgentTool.NAME);
     }
 
     /** Arms the one-time handoff standing order shown instead of the plan reference on the next turn. */
@@ -138,7 +183,44 @@ public class AgentContextComponent {
             result.add(new EclipseFileContextItem("docs/memory.md", projectRef));
             result.add(new EclipseFileContextItem("docs/index.md", projectRef));
         }
+        result.addAll(providedContext(agent, ContextProvider.Scope.TURN));
         result.addAll(userContext.get());
+        return result;
+    }
+
+    /**
+     * Runs the contributed context providers for one scope. Never lets a provider break the turn:
+     * failures become a small visible item, and the per-provider item cap is disclosed.
+     */
+    private List<ContextItem> providedContext(AiAgent agent, ContextProvider.Scope scope) {
+        if (contextProviders.isEmpty()) return List.of();
+
+        var project = projectRef.get();
+        var request = new ContextRequest(
+                project == null ? null : project.getName(),
+                project == null ? null : JdtUtil.diskPathOf(project),
+                agent == null ? null : agent.getName());
+
+        var result = new ArrayList<ContextItem>();
+        for (var provider : contextProviders) {
+            if (provider == null || provider.scope() != scope) continue;
+            try {
+                var items = provider.provide(request);
+                if (items == null || items.isEmpty()) continue;
+                int max = Math.min(items.size(), MAX_PROVIDER_ITEMS);
+                for (int i = 0; i < max; i++) {
+                    if (items.get(i) != null) result.add(items.get(i));
+                }
+                if (items.size() > max) {
+                    result.add(new SimpleContextItem("Context provider limit",
+                            provider.label() + " returned " + items.size()
+                                    + " items; showing " + max + "."));
+                }
+            } catch (Exception e) {
+                LOG.error("Context provider " + provider.label() + " failed", e);
+                result.add(new SimpleContextItem("Context provider failed", provider.label()));
+            }
+        }
         return result;
     }
 

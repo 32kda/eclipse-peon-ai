@@ -97,6 +97,13 @@ class CustomAgentServiceTest extends AbstractMemoryFileTest {
     }
 
     @Test
+    void toolNameGateUsesTheAllowlist() {
+        assertThat(agent(List.of("read_file"), false, null).isToolNameActive("startAgent")).isFalse();
+        assertThat(agent(List.of("*"), false, null).isToolNameActive("startAgent")).isTrue();
+        assertThat(agent(null, false, null).isToolNameActive("startAgent")).isTrue();
+    }
+
+    @Test
     void readOnlyBlocksEditTools() {
         var svc = agent(List.of("*"), true, null);
 

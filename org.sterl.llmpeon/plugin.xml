@@ -2,6 +2,51 @@
 <?eclipse version="3.4"?>
 <plugin>
 
+   <!-- Trigger-based completion providers (e.g. '@' files, '#' Java symbols).
+        Implementations live in other bundles; the input widget stays provider-agnostic. -->
+   <extension-point
+         id="mentionProvider"
+         name="Peon mention provider"
+         schema="schema/mentionProvider.exsd"/>
+
+   <!-- Bundle-contributed skills (short description + expandable body) and agents
+        (description + prompt + curated tools). File-based skills/agents override by name. -->
+   <extension-point
+         id="skill"
+         name="Peon skill provider"
+         schema="schema/skill.exsd"/>
+   <extension-point
+         id="agent"
+         name="Peon agent provider"
+         schema="schema/agent.exsd"/>
+   <extension-point
+         id="tool"
+         name="Peon tool provider"
+         schema="schema/tool.exsd"/>
+   <extension-point
+         id="contextProvider"
+         name="Peon context provider"
+         schema="schema/contextProvider.exsd"/>
+   <extension-point
+         id="mcpServer"
+         name="Peon in-process MCP server"
+         schema="schema/mcpServer.exsd"/>
+
+   <!-- S3.2: focused specialist sub-agents with curated tool sets (anti "god agent"). -->
+   <extension point="org.sterl.llmpeon.agent">
+      <agentProvider
+            class="org.sterl.llmpeon.parts.contribution.BuiltInSpecialistAgents"
+            name="Built-in specialists"/>
+   </extension>
+
+   <!-- '#' Java symbols via the native JDT type dialog. Optional: the java import of
+        org.eclipse.jdt.ui is resolution:=optional, and a missing bundle is logged + skipped. -->
+   <extension point="org.sterl.llmpeon.mentionProvider">
+      <dialogProvider
+            class="org.sterl.llmpeon.parts.mention.JavaSymbolMentionProvider"
+            name="Java symbols"/>
+   </extension>
+
    <extension
          id="org.sterl.llmpeon.fragment"
          point="org.eclipse.e4.workbench.model">

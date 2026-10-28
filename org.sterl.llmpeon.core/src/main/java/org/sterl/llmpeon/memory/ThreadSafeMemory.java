@@ -11,6 +11,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import org.jspecify.annotations.Nullable;
+import org.sterl.llmpeon.session.UserReminder;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.shared.StringUtil;
 
@@ -26,7 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 public class ThreadSafeMemory {
 
     private final LinkedList<ChatMessage> memory = new LinkedList<ChatMessage>();
-    private volatile FileAgentHistoryStore store;
+    private volatile AgentHistoryStore store;
     @Getter
     private volatile int totalTokenUsed = 0;
 
@@ -72,7 +73,7 @@ public class ThreadSafeMemory {
         this(null);
     }
 
-    public ThreadSafeMemory(FileAgentHistoryStore store) {
+    public ThreadSafeMemory(AgentHistoryStore store) {
         this.store = store;
         if (store != null) {
             memory.addAll(store.load());
@@ -95,9 +96,13 @@ public class ThreadSafeMemory {
         tokenIsEstimate = true;
 
         if (message instanceof UserMessage num 
-                && (!memory.isEmpty() && memory.getLast() instanceof UserMessage lum)) {
+                && (!memory.isEmpty() && memory.getLast() instanceof UserMessage lum)
+                && !UserReminder.isReminder(num) && !UserReminder.isReminder(lum)) {
             memory.removeLast();
             memory.add(ChatMessageUtil.join(lum, num));
+            // The new raw user message stays visible in a session transcript; the joined form is
+            // the LLM context (persisted separately below).
+            appendTranscript(num);
             persist(new ArrayList<>(memory));
         } else if (message instanceof UserMessage num 
                 && (!memory.isEmpty() && memory.getLast() instanceof ToolExecutionResultMessage tR)) {
@@ -126,7 +131,7 @@ public class ThreadSafeMemory {
      */
     public Optional<Path> historyFile() {
         var s = store;
-        return s != null ? Optional.of(s.historyFile()) : Optional.empty();
+        return s != null ? s.backingFile() : Optional.empty();
     }
 
     public synchronized boolean containsUserMessage(String message) {
@@ -243,6 +248,17 @@ public class ThreadSafeMemory {
         return this.memory.get(index);
     }
     
+    private void appendTranscript(ChatMessage message) {
+        var s = store;
+        if (s == null) return;
+        try {
+            s.appendTranscript(message);
+        } catch (IOException e) {
+            store = null;
+            throw new RuntimeException("Failed to append chat transcript", e);
+        }
+    }
+
     private void append(ChatMessage message) {
         var s = store;
         if (s == null) return;

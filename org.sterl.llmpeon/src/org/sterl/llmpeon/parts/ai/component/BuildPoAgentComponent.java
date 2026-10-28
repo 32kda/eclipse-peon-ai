@@ -16,6 +16,8 @@ import org.sterl.llmpeon.context.AgentsMdContextItem;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.EclipseFileContextItem;
 import org.sterl.llmpeon.context.StaticContextItem;
+import org.sterl.llmpeon.memory.AgentHistoryStore;
+import org.sterl.llmpeon.memory.SessionAgentHistoryStore;
 import org.sterl.llmpeon.parts.tools.AskUserTool;
 import org.sterl.llmpeon.parts.tools.EclipseGrepTool;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceReadFileTool;
@@ -25,6 +27,8 @@ import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
+import org.sterl.llmpeon.session.SessionId;
+import org.sterl.llmpeon.session.SessionService;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
@@ -39,8 +43,11 @@ public class BuildPoAgentComponent {
     private final Supplier<IProject> projectRef;
     private final SharedToolsComponent sharedTools;
     private final ToolService sharedToolService;
-    /** Directory holding Jon's {@code <agent>-history.jsonl} directly (ADR-0041 R2); null = RAM-only. */
+    /** Directory holding legacy {@code <agent>-history.jsonl} files; null = RAM-only. */
     private final Path historyStateDir;
+    /** Non-null when the agents should persist into a session instead of legacy per-agent files. */
+    private final SessionService sessionService;
+    private final SessionId sessionId;
     /**
      * Fallback static context (env info only) handed to the slaves in {@link #build()}. In fully wired
      * operation {@code PeonAiService.initStaticContext()} overrides it with the same Env-only list
@@ -52,12 +59,27 @@ public class BuildPoAgentComponent {
     public BuildPoAgentComponent(ConfiguredChatModel configuredModel,
             Supplier<IProject> projectRef,
             SharedToolsComponent sharedTools, Path historyStateDir) {
+        this(configuredModel, projectRef, sharedTools, historyStateDir, null, null);
+    }
+
+    public BuildPoAgentComponent(ConfiguredChatModel configuredModel,
+            Supplier<IProject> projectRef,
+            SharedToolsComponent sharedTools, SessionService sessionService, SessionId sessionId) {
+        this(configuredModel, projectRef, sharedTools, null, sessionService, sessionId);
+    }
+
+    private BuildPoAgentComponent(ConfiguredChatModel configuredModel,
+            Supplier<IProject> projectRef,
+            SharedToolsComponent sharedTools, Path historyStateDir,
+            SessionService sessionService, SessionId sessionId) {
         super();
         this.configuredModel = configuredModel;
         this.projectRef = projectRef;
         this.sharedTools = sharedTools;
         this.sharedToolService = sharedTools.toolService();
         this.historyStateDir = historyStateDir;
+        this.sessionService = sessionService;
+        this.sessionId = sessionId;
     }
 
     public AiPoAgent build() {
@@ -91,27 +113,48 @@ public class BuildPoAgentComponent {
                 && !(t.getTool() instanceof AskUserTool);
         // Eager shared slaves (ADR-0025): created once here and handed — as the same NamedAgent objects —
         // to both the delegate tool (which drives them) and AiPoAgent (which exposes them via getTeam()).
-        var planSlave = new AiPlanAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
-            @Override protected Predicate<SmartToolExecutor> getToolFilter() {
-                return super.getToolFilter().and(noPrivilegedTools);
-            }
-        };
+        var planSlave = sessionService == null
+                ? new AiPlanAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                }
+                : new AiPlanAgent(configuredModel, sharedToolService,
+                        sessionStore("Da Thinka"), SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                };
         planSlave.setStaticContext(ContextItem.newList(staticContent, 
                 () -> "Your name is Da Thinka."));
         
-        var reviewSlave = new AiReviewAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
-            @Override protected Predicate<SmartToolExecutor> getToolFilter() {
-                return super.getToolFilter().and(noPrivilegedTools);
-            }
-        };
+        var reviewSlave = sessionService == null
+                ? new AiReviewAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                }
+                : new AiReviewAgent(configuredModel, sharedToolService,
+                        sessionStore("Da Dok"), SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                };
         reviewSlave.setStaticContext(ContextItem.newList(staticContent, 
                 () -> "Your name is Da Dok."));
 
-        var devSlave = new AiDevAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
-            @Override protected Predicate<SmartToolExecutor> getToolFilter() {
-                return super.getToolFilter().and(noPrivilegedTools);
-            }
-        };
+        var devSlave = sessionService == null
+                ? new AiDevAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                }
+                : new AiDevAgent(configuredModel, sharedToolService,
+                        sessionStore("Da Mek"), SLAVE_COMPACT_FACTOR) {
+                    @Override protected Predicate<SmartToolExecutor> getToolFilter() {
+                        return super.getToolFilter().and(noPrivilegedTools);
+                    }
+                };
         devSlave.setStaticContext(ContextItem.newList(staticContent, 
                 () -> "Your name is Da Mek."));
 
@@ -140,8 +183,15 @@ public class BuildPoAgentComponent {
         poToolService.addTool(sharedTools.docsLinterTool());
         poToolService.addTool(sharedTools.docsIdTool());
         // Header team order = lifecycle order (user decision): plan → build → review.
-        var poAgent = new AiPoAgent(configuredModel, poToolService, historyStateDir, List.of(thinka, mek, doc));
+        var poAgent = sessionService == null
+                ? new AiPoAgent(configuredModel, poToolService, historyStateDir, List.of(thinka, mek, doc))
+                : new AiPoAgent(configuredModel, poToolService,
+                        sessionStore(AiPoAgent.NAME), List.of(thinka, mek, doc));
 
         return poAgent;
+    }
+
+    private AgentHistoryStore sessionStore(String agentName) {
+        return new SessionAgentHistoryStore(sessionService, sessionId, agentName);
     }
 }
